@@ -204,6 +204,7 @@
                 <div class="field-group"><label for="telegramPenalty3">第 3 次封禁分钟数</label><input id="telegramPenalty3" type="number" min="0" max="525600" value="1440" inputmode="numeric" /><p class="field-help">0 表示该档不临时封禁。</p></div>
               </div>
               <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramBlacklistOnThird"><input id="telegramBlacklistOnThird" type="checkbox" /><span class="switch-ui"></span><span>第三次触发后永久拉黑</span></label><span class="proxy-state">默认关闭</span></div>
+              <div class="field-group"><label for="telegramAdminUserIds">管理员 Telegram user_id</label><input id="telegramAdminUserIds" type="text" inputmode="numeric" placeholder="例如：123456789，可用逗号分隔多个 ID" autocomplete="off" /><p class="field-help">先给 Bot 发送 /whoami 获取 ID。仅这些 ID 可执行 Telegram 管理员指令；也可用环境变量配置。</p></div>
               <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramStickerEnabled"><input id="telegramStickerEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印 WebP sticker</span></label><span class="proxy-state" id="telegramStickerState">已开启</span></div>
               <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramWebmStickerEnabled"><input id="telegramWebmStickerEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印 WebM sticker</span></label><span class="proxy-state" id="telegramWebmStickerState">已开启</span></div>
               <div class="field-group compact-field"><label for="telegramWebmFrame">WebM sticker 打印帧</label><select id="telegramWebmFrame"><option value="first">第一帧</option><option value="second">第二帧</option><option value="penultimate" selected>倒数第二帧（默认）</option><option value="last">最后一帧</option></select><p class="field-help">程序会先读取 WebM 总帧数，再精确选择目标帧；只有开启 WebM 打印时生效。</p></div>
@@ -226,7 +227,7 @@
             <div class="panel-heading"><div><p class="panel-index">LIVE LOG</p><h3>日志输出台</h3></div><button class="copy-button" id="clearTelegramLogs" type="button"><i data-lucide="trash-2"></i><span>清空日志</span></button></div>
             <div class="telegram-log-list" id="telegramLogList"><div class="telegram-log-empty">监听启动后，这里会显示收到的消息、过滤结果、打印状态和回复状态。</div></div>
           </section>
-          <div class="notice message-notice"><div class="notice-icon"><i data-lucide="shield-check"></i></div><div><strong>消息过滤规则</strong><p>只打印 Telegram 私聊文字、已开启的图片和 WebP/WebM sticker。/start 等指令、群聊、频道、TGS、文件、视频、语音和其他动画会被自动跳过；WebM 会按上方选择抽取一帧；每收到一条消息都会重新等待 500ms，连续 500ms 没有新消息后再合并打印。</p></div></div>
+          <div class="notice message-notice"><div class="notice-icon"><i data-lucide="shield-check"></i></div><div><strong>消息过滤规则</strong><p>只打印 Telegram 私聊文字、已开启的图片和 WebP/WebM sticker。普通用户的 /start 等指令、群聊、频道、TGS、文件、视频、语音和其他动画会被自动跳过；已配置的管理员可在私聊使用管理指令；WebM 会按上方选择抽取一帧；每收到一条消息都会重新等待 500ms，连续 500ms 没有新消息后再合并打印。</p></div></div>
         </section>
 
         <section class="page-view hidden-view" id="settingsView" aria-hidden="true">

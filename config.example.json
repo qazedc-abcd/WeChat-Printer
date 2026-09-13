@@ -19,6 +19,7 @@
       1440
     ],
     "rateLimitBlacklistOnThird": false,
+    "adminUserIds": [],
     "blacklist": [],
     "stickerEnabled": true,
     "webmStickerEnabled": true,

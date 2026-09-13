@@ -75,12 +75,36 @@ cp config.example.json config.json
 
 ## Telegram 监听
 
-仅处理私聊文字与图片/sticker；群聊、频道、指令、文件、视频、语音等会被忽略。
+普通消息仅处理私聊文字与图片/sticker；群聊和频道会被忽略。配置了 `telegram.adminUserIds` 后，管理员还可以通过私聊指令查看用户、调整限流和管理黑名单。
 
 - 500ms 内的连续消息合并为一批，按 Telegram 消息顺序排列（文字在前则先文字后图，反之亦然），caption 直接打印在图片下方。
 - 可限制单批字数、每用户每分钟任务数，并自定义打印中/完成/失败/过滤/限流的回复文案。
 - 图片统一缩放到 280×280 白底画布后黑白化；WebM sticker 可选取首帧/第二帧/倒数第二帧/末帧。
 - 相同媒体按 `file_unique_id` 缓存处理结果，避免重复处理。Imgchr 默认缓存 7 天；ImgBed 缓存天数可配置（`0` 为永不过期）。
+
+### Telegram 管理员指令
+
+管理员 ID 使用 Telegram 数字 `user_id`，可在网页“消息监听 → 回复与限制”的管理员字段中填写，也可以写入 `config.json` 的 `telegram.adminUserIds` 数组或使用环境变量 `TELEGRAM_ADMIN_USER_IDS`（多个 ID 用逗号分隔）。给 Bot 发送 `/whoami` 可以查看自己的 ID，再将 ID 配置为管理员后重启或重新开始监听。
+
+管理员指令仅在私聊生效，并且不会进入打印队列：
+
+```text
+/help                         查看帮助
+/users [recent|blocked]       查看用户
+/user <用户ID>                查看用户详情
+/messages <用户ID>            查看最近消息和处理结果
+/limits                       查看全局限流
+/limit <用户ID> rpm <数值> [时长]
+/limit <用户ID> chars <字数> [时长]
+/limit <用户ID> reset         恢复全局限制
+/blacklist                    查看黑名单
+/block <用户ID> [时长] [原因]  封禁用户（默认永久，时长如 2h/7d）
+/unblock <用户ID>              解除封禁
+/status                       查看监听、队列和统计
+/logs [failed|limited|user <用户ID>] 查看日志
+```
+
+用户资料、最近消息、单用户限制、黑名单和管理员审计记录保存在服务端的 `.telegram-admin.json`，与浏览器或本地配置保存模式无关。该文件可能包含用户消息预览，请不要提交到版本库或分享；消息和审计记录会自动限制数量。
 
 ## 图床配置
 
@@ -105,6 +129,7 @@ cp config.example.json config.json
 | `config.json` | 本地配置文件，可能含 Bot Token、代理地址、图床凭据（明文，切勿提交或分享）。 |
 | `config.example.json` | 可复制使用的本地配置示例，不含真实凭据；`__说明` 字段包含使用提示。 |
 | `.sticker-cache.json` | Telegram 图片/sticker 处理结果缓存。 |
+| `.telegram-admin.json` | Telegram 管理员数据、用户资料、消息预览、单用户限制、黑名单和审计记录；包含隐私数据，切勿提交或分享。 |
 | `output/` | 已有输出目录，非运行必需。 |
 
 ## 环境变量
@@ -115,6 +140,7 @@ cp config.example.json config.json
 | `PORT` | `4173` | 监听端口。 |
 | `WECHAT_PRINTER_FFMPEG` | `ffmpeg` | FFmpeg 路径。 |
 | `WECHAT_PRINTER_FFPROBE` | `ffprobe` | FFprobe 路径。 |
+| `TELEGRAM_ADMIN_USER_IDS` | 空 | Telegram 数字管理员 ID，多个 ID 用逗号分隔；可替代配置文件中的 `adminUserIds`。 |
 
 ## 开发与测试
 
@@ -140,7 +166,7 @@ node --check start-local.js
 | `DELETE` | `/api/telegram/blacklist/:userId` | 解除封控 |
 | `GET` | `/api/image?url=...` | 图片预览代理 |
 
-仅供本机网页使用，无独立身份认证层。
+本地 HTTP 接口仍仅供本机网页使用；Telegram 管理员指令通过数字 `user_id` 白名单认证，不要把 Bot Token、设备 SID 或图床凭据放进管理员回复。
 
 ## 故障排查
 

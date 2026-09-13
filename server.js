@@ -8,6 +8,19 @@ const { spawn } = require('child_process');
 const { printableText, unsupportedCharacters } = require('./printable-text');
 const { telegramPrintNodes, telegramContentNodes, telegramQrAllowed } = require('./telegram-layout');
 const { isSidExpired } = require('./print-response');
+const {
+  MAX_PREVIEW_LENGTH,
+  MAX_MESSAGES,
+  MAX_AUDIT_LOGS,
+  normalizeAdminUserIds,
+  parseTelegramCommand,
+  parseTelegramUserId,
+  parseDuration,
+  truncateText,
+  paginateTelegramText,
+  emptyAdminStore,
+  normalizeAdminStore,
+} = require('./telegram-admin');
 
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -26,6 +39,8 @@ const STICKER_CACHE_FILE = path.join(ROOT, '.sticker-cache.json');
 const CACHE_META_KEY = '__meta';
 const CACHE_PENDING_PREFIX = '__pending-delete:';
 const CONFIG_FILE = path.join(ROOT, 'config.json');
+const TELEGRAM_ADMIN_FILE = path.join(ROOT, '.telegram-admin.json');
+const ENV_ADMIN_USER_IDS = normalizeAdminUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || '');
 
 function log(level, message, detail = '') {
   const suffix = detail ? ` | ${String(detail).replace(/\s+/g, ' ').trim()}` : '';
@@ -47,6 +62,7 @@ const DEFAULT_APP_CONFIG = {
     reply_printing: '正在打印，请稍候。', reply_printed: '已打印。',
     reply_print_failed: '打印失败，请稍后重试。', reply_unsupported: '该消息类型不支持打印，请发送文字。',
     reply_rate_limited: '操作太频繁，请稍后再试。',
+    adminUserIds: [],
   },
   imageHost: { provider: DEFAULT_IMAGE_HOST, cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false },
 };
@@ -83,6 +99,7 @@ function mergeConfig(raw = {}) {
       rateLimitStrikeWindowMinutes: Number.isFinite(Number(telegram.rateLimitStrikeWindowMinutes)) ? Math.max(1, Math.min(1440, Math.floor(Number(telegram.rateLimitStrikeWindowMinutes)))) : 1,
       rateLimitPenaltyMinutes: Array.isArray(telegram.rateLimitPenaltyMinutes) ? [0, 1, 2].map((index) => Number.isFinite(Number(telegram.rateLimitPenaltyMinutes[index])) ? Math.max(0, Math.min(525600, Math.floor(Number(telegram.rateLimitPenaltyMinutes[index])))) : [2, 10, 1440][index]) : [2, 10, 1440],
       rateLimitBlacklistOnThird: telegram.rateLimitBlacklistOnThird === true,
+      adminUserIds: normalizeAdminUserIds(telegram.adminUserIds),
       blacklist: Array.isArray(telegram.blacklist) ? telegram.blacklist.filter((item) => item && item.userId).map((item) => ({
         userId: String(item.userId), name: String(item.name || '未知用户'), username: String(item.username || ''),
         blockedUntil: item.blockedUntil === null ? null : Number(item.blockedUntil) || null,
@@ -115,6 +132,41 @@ function clearAppConfig() {
 }
 
 let appConfig = loadAppConfig();
+
+function loadTelegramAdminStore() {
+  try {
+    const store = normalizeAdminStore(JSON.parse(fs.readFileSync(TELEGRAM_ADMIN_FILE, 'utf8')), [...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+    if (!Object.keys(store.blacklist).length && Array.isArray(appConfig.telegram.blacklist)) {
+      return normalizeAdminStore({ ...store, blacklist: appConfig.telegram.blacklist }, [...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+    }
+    return store;
+  } catch {
+    return normalizeAdminStore({ blacklist: appConfig.telegram.blacklist }, [...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+  }
+}
+
+let telegramAdminStore = loadTelegramAdminStore();
+
+function saveTelegramAdminStore() {
+  try {
+    telegramAdminStore = normalizeAdminStore({
+      ...telegramAdminStore,
+      adminUserIds: [...telegramState.adminUserIds],
+      users: Object.fromEntries(telegramState.users),
+      userOverrides: Object.fromEntries(telegramState.userOverrides),
+      blacklist: Object.fromEntries(telegramState.blacklist),
+      messages: telegramState.messages,
+      auditLogs: telegramState.auditLogs,
+    }, [...telegramState.adminUserIds]);
+    const temporaryFile = `${TELEGRAM_ADMIN_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temporaryFile, `${JSON.stringify(telegramAdminStore, null, 2)}\n`, 'utf8');
+    fs.renameSync(temporaryFile, TELEGRAM_ADMIN_FILE);
+    return true;
+  } catch (error) {
+    log('ERROR', 'Telegram 管理数据保存失败', error.message);
+    return false;
+  }
+}
 
 function loadStickerCache() {
   try {
@@ -440,9 +492,15 @@ const telegramState = {
   replyUnsupported: '该消息类型不支持打印，请发送文字。',
   replyRateLimited: '操作太频繁，请稍后再试。',
   logs: [],
+  adminUserIds: new Set(telegramAdminStore.adminUserIds),
+  users: new Map(Object.entries(telegramAdminStore.users)),
+  userOverrides: new Map(Object.entries(telegramAdminStore.userOverrides)),
+  messages: telegramAdminStore.messages.slice(-MAX_MESSAGES),
+  messageById: new Map(telegramAdminStore.messages.map((item) => [item.id, item])),
+  auditLogs: telegramAdminStore.auditLogs.slice(-MAX_AUDIT_LOGS),
   userTasks: new Map(),
   rateLimitStrikes: new Map(),
-  blacklist: new Map(appConfig.telegram.blacklist.map((entry) => [entry.userId, entry])),
+  blacklist: new Map(Object.entries(telegramAdminStore.blacklist)),
   printQueue: [],
   printFlushTimer: null,
   lastMessage: '',
@@ -459,6 +517,8 @@ const imageHostCleanupState = {
 };
 let imageHostCleanupTimer = null;
 const MAX_TELEGRAM_LOGS = 200;
+const MAX_TELEGRAM_MESSAGES = MAX_MESSAGES;
+const MAX_TELEGRAM_AUDIT_LOGS = MAX_AUDIT_LOGS;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -1140,18 +1200,104 @@ function normalizeReply(value, fallback) {
 }
 
 function addTelegramLog(type, message, detail = '') {
-  const entry = { time: new Date().toISOString(), type, message: String(message || ''), detail: String(detail || '') };
+  const entry = { time: new Date().toISOString(), type, message: truncateText(message, MAX_PREVIEW_LENGTH), detail: truncateText(detail, 500) };
   telegramState.logs.push(entry);
   if (telegramState.logs.length > MAX_TELEGRAM_LOGS) telegramState.logs.splice(0, telegramState.logs.length - MAX_TELEGRAM_LOGS);
   const level = ['failed', 'reply_failed'].includes(type) ? 'ERROR' : ['blocked', 'filtered', 'ignored', 'limited'].includes(type) ? 'WARN' : 'INFO';
   log(level, `Telegram ${type}`, `${entry.message}${entry.detail ? ` | ${entry.detail}` : ''}`);
 }
 
+function telegramMessageType(message) {
+  if (message?.text) return 'text';
+  if (message?.photo) return 'photo';
+  if (message?.sticker) return 'sticker';
+  if (message?.document) return 'document';
+  if (message?.video) return 'video';
+  if (message?.voice) return 'voice';
+  return 'other';
+}
+
+function upsertTelegramUser(user, message = null) {
+  const userId = parseTelegramUserId(user?.userId || user?.id);
+  if (!userId) return null;
+  const now = Date.now();
+  const previous = telegramState.users.get(userId);
+  const profile = {
+    userId,
+    name: truncateText(user?.name || previous?.name || '未知用户', 120),
+    username: truncateText(user?.username || previous?.username || '', 120),
+    firstSeenAt: previous?.firstSeenAt || now,
+    lastSeenAt: now,
+    messageCount: (previous?.messageCount || 0) + (message ? 1 : 0),
+    printSuccessCount: previous?.printSuccessCount || 0,
+    printFailedCount: previous?.printFailedCount || 0,
+    limitedCount: previous?.limitedCount || 0,
+    lastMessageType: message ? telegramMessageType(message) : (previous?.lastMessageType || ''),
+    lastMessagePreview: message ? truncateText(message.text || message.caption || `[${telegramMessageType(message)}]`) : (previous?.lastMessagePreview || ''),
+  };
+  telegramState.users.set(userId, profile);
+  return profile;
+}
+
+function recordTelegramMessage(message, updateId, userProfile) {
+  const userId = String(userProfile.userId);
+  const entry = {
+    id: `${updateId}:${message.message_id || Date.now()}`,
+    updateId: Number(updateId) || 0,
+    messageId: Number(message.message_id) || 0,
+    userId,
+    chatId: String(message.chat?.id || userId),
+    receivedAt: Date.now(),
+    type: telegramMessageType(message),
+    preview: truncateText(message.text || message.caption || `[${telegramMessageType(message)}]`),
+    status: 'received',
+    detail: '',
+    finishedAt: 0,
+  };
+  telegramState.messages.push(entry);
+  telegramState.messageById = telegramState.messageById || new Map();
+  telegramState.messageById.set(entry.id, entry);
+  if (telegramState.messages.length > MAX_TELEGRAM_MESSAGES) {
+    const removed = telegramState.messages.splice(0, telegramState.messages.length - MAX_TELEGRAM_MESSAGES);
+    removed.forEach((item) => telegramState.messageById.delete(item.id));
+  }
+  return entry;
+}
+
+function updateTelegramMessage(id, status, detail = '') {
+  const entry = telegramState.messageById?.get(id) || telegramState.messages.find((item) => item.id === id);
+  if (!entry) return;
+  entry.status = status;
+  entry.detail = truncateText(detail, 300);
+  if (['printed', 'failed', 'filtered', 'limited', 'blocked'].includes(status)) entry.finishedAt = Date.now();
+  const user = telegramState.users.get(entry.userId);
+  if (user && status === 'printed') user.printSuccessCount += 1;
+  if (user && status === 'failed') user.printFailedCount += 1;
+  if (user && status === 'limited') user.limitedCount += 1;
+}
+
+function effectiveTelegramRules(userId) {
+  const base = { maxPerMinute: telegramState.maxPerMinute, maxCharsPerTask: telegramState.maxCharsPerTask };
+  const override = telegramState.userOverrides.get(String(userId));
+  if (!override || (override.expiresAt !== null && override.expiresAt <= Date.now())) {
+    if (override) {
+      telegramState.userOverrides.delete(String(userId));
+      saveTelegramAdminStore();
+    }
+    return base;
+  }
+  return {
+    maxPerMinute: override.maxPerMinute === null ? base.maxPerMinute : override.maxPerMinute,
+    maxCharsPerTask: override.maxCharsPerTask === null ? base.maxCharsPerTask : override.maxCharsPerTask,
+  };
+}
+
 function userTaskAllowed(userId) {
-  if (telegramState.maxPerMinute === 0) return true;
+  const maxPerMinute = effectiveTelegramRules(userId).maxPerMinute;
+  if (maxPerMinute === 0) return true;
   const now = Date.now();
   const entries = (telegramState.userTasks.get(String(userId)) || []).filter((timestamp) => now - timestamp < 60_000);
-  if (entries.length >= telegramState.maxPerMinute) {
+  if (entries.length >= maxPerMinute) {
     telegramState.userTasks.set(String(userId), entries);
     return false;
   }
@@ -1171,8 +1317,9 @@ function queuedTextLengthForUser(userId) {
 }
 
 function textTaskAllowed(userId, textLength) {
-  if (telegramState.maxCharsPerTask === 0) return true;
-  return queuedTextLengthForUser(userId) + textLength <= telegramState.maxCharsPerTask;
+  const maxCharsPerTask = effectiveTelegramRules(userId).maxCharsPerTask;
+  if (maxCharsPerTask === 0) return true;
+  return queuedTextLengthForUser(userId) + textLength <= maxCharsPerTask;
 }
 
 function activeBlacklistEntry(userId) {
@@ -1182,6 +1329,7 @@ function activeBlacklistEntry(userId) {
   if (entry.blockedUntil !== null && entry.blockedUntil <= Date.now()) {
     if (telegramState.blacklist.delete) telegramState.blacklist.delete(key);
     else telegramState.blacklist = telegramState.blacklist.filter((item) => item.userId !== key);
+    saveTelegramAdminStore();
     return null;
   }
   return entry;
@@ -1205,11 +1353,17 @@ function blockedUser(userId) {
 }
 
 function setBlacklistEntry(entry) {
-  if (telegramState.blacklist instanceof Map) telegramState.blacklist.set(String(entry.userId), entry);
+  if (telegramState.blacklist instanceof Map) {
+    telegramState.blacklist.set(String(entry.userId), entry);
+    saveTelegramAdminStore();
+  }
 }
 
 function removeBlacklistEntry(userId) {
-  if (telegramState.blacklist instanceof Map) telegramState.blacklist.delete(String(userId));
+  if (telegramState.blacklist instanceof Map) {
+    telegramState.blacklist.delete(String(userId));
+    saveTelegramAdminStore();
+  }
 }
 
 function recordRateLimit(user, reason = '多次触发频率限制') {
@@ -1230,6 +1384,7 @@ function recordRateLimit(user, reason = '多次触发频率限制') {
     reason: `${reason}（第 ${strikeNumber} 次）`,
     strikes: strikeNumber,
     createdAt: now,
+    createdBy: 'auto',
   };
   if (permanent || penaltyMinutes > 0) setBlacklistEntry(entry);
   const action = permanent ? '已永久拉黑' : penaltyMinutes > 0 ? `封禁 ${penaltyMinutes} 分钟` : '本档未设置临时封禁';
@@ -1351,6 +1506,7 @@ function flushPrintQueue(generation) {
   const payload = Buffer.from(JSON.stringify(telegramPayload(batch)));
   log('INFO', 'Telegram 批量打印已转发', `${batch.length} 条消息，${payload.length} bytes -> ${TARGET_HOST}`);
   batch.forEach((item) => {
+    updateTelegramMessage(item.historyId, 'printing');
     addTelegramLog('printing', item.printText, `批量任务 ${batch.length} 条消息`);
     telegramReply(item.chatId, telegramPrintingReply(item), generation);
   });
@@ -1373,18 +1529,22 @@ function flushPrintQueue(generation) {
           : { ok: false, error: parseError.message, replyError: '' };
       }
     }
+    if (telegramState.generation !== generation) return;
     batch.forEach(async (item) => {
       if (result.ok) {
+        updateTelegramMessage(item.historyId, 'printed');
         telegramState.lastMessage = item.printText;
         telegramState.error = '';
         addTelegramLog('printed', item.printText, `批量任务 ${batch.length} 条消息`);
         await telegramReply(item.chatId, telegramState.replyPrinted, generation);
       } else {
+        updateTelegramMessage(item.historyId, 'failed', result.error);
         telegramState.error = result.error;
         addTelegramLog('failed', item.printText, result.error);
         await telegramReply(item.chatId, result.replyError || telegramState.replyPrintFailed, generation);
       }
     });
+    saveTelegramAdminStore();
   });
 }
 
@@ -1394,6 +1554,8 @@ function schedulePrintFlush(generation) {
 }
 
 function enqueuePrintMessage(item, generation) {
+  updateTelegramMessage(item.historyId, 'queued');
+  saveTelegramAdminStore();
   telegramState.printQueue.push(item);
   schedulePrintFlush(generation);
 }
@@ -1403,6 +1565,193 @@ function pausePrintFlushForFollowingImage(userId) {
   if (!telegramState.printFlushTimer || previous?.userId !== userId || previous.kind !== 'text') return false;
   clearTimeout(telegramState.printFlushTimer);
   telegramState.printFlushTimer = null;
+  return true;
+}
+
+function formatTelegramUser(user) {
+  if (!user) return '未知用户';
+  return `${user.name || '未知用户'}${user.username ? ` (@${user.username})` : ''} [${user.userId}]`;
+}
+
+function formatTelegramTime(value) {
+  if (!value) return '-';
+  try { return new Date(value).toLocaleString('zh-CN'); } catch { return '-'; }
+}
+
+function telegramAdminAuthorized(userId) {
+  return telegramState.adminUserIds.has(String(userId));
+}
+
+function recordTelegramAudit(adminUserId, command, targetUserId, before, after, ok = true, error = '') {
+  telegramState.auditLogs.push({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    time: new Date().toISOString(),
+    adminUserId: String(adminUserId),
+    command: truncateText(command, 200),
+    targetUserId: parseTelegramUserId(targetUserId),
+    before: truncateText(before, 500),
+    after: truncateText(after, 500),
+    ok,
+    error: truncateText(error, 300),
+  });
+  if (telegramState.auditLogs.length > MAX_TELEGRAM_AUDIT_LOGS) telegramState.auditLogs.splice(0, telegramState.auditLogs.length - MAX_TELEGRAM_AUDIT_LOGS);
+  saveTelegramAdminStore();
+}
+
+function telegramAdminHelp() {
+  return [
+    '管理员指令：',
+    '/whoami 查看自己的 Telegram ID',
+    '/users [recent|blocked] 查看用户',
+    '/user <用户ID> 查看用户详情',
+    '/messages <用户ID> 查看最近消息',
+    '/limits 查看全局限流',
+    '/limit <用户ID> rpm <次数> [时长]',
+    '/limit <用户ID> chars <字数> [时长]',
+    '/limit <用户ID> reset 恢复全局限制',
+    '/blacklist 查看黑名单',
+    '/block <用户ID> [时长] [原因] 永久封禁可用 perm',
+    '/unblock <用户ID> 解除封禁',
+    '/status 查看 Bot、队列和统计',
+    '/logs [failed|limited|user <用户ID>] 查看日志',
+  ].join('\n');
+}
+
+function adminCommandTarget(args) {
+  return parseTelegramUserId(args[0]);
+}
+
+function userOverrideText(userId) {
+  let override = telegramState.userOverrides.get(String(userId));
+  if (override?.expiresAt !== null && override.expiresAt <= Date.now()) {
+    telegramState.userOverrides.delete(String(userId));
+    saveTelegramAdminStore();
+    override = null;
+  }
+  if (!override) return '跟随全局限制';
+  const expires = override.expiresAt === null ? '永久' : `至 ${formatTelegramTime(override.expiresAt)}`;
+  return `rpm=${override.maxPerMinute === null ? '全局' : override.maxPerMinute}，chars=${override.maxCharsPerTask === null ? '全局' : override.maxCharsPerTask}，${expires}`;
+}
+
+async function handleTelegramAdminCommand(message, userProfile, generation) {
+  const text = typeof message.text === 'string' ? message.text : '';
+  const parsed = parseTelegramCommand(text);
+  if (!parsed) return false;
+  const userId = String(userProfile.userId);
+  if (parsed.command === 'whoami') {
+    await telegramReply(message.chat?.id, `你的 Telegram user_id 是 ${userId}。`, generation);
+    return true;
+  }
+  if (!telegramAdminAuthorized(userId)) {
+    recordTelegramAudit(userId, text, '', '', '', false, 'unauthorized');
+    await telegramReply(message.chat?.id, '无权限执行管理员指令。', generation);
+    return true;
+  }
+  let reply = '';
+  let targetUserId = '';
+  let before = '';
+  let after = '';
+  let ok = true;
+  let error = '';
+  try {
+    const { command, args } = parsed;
+    if (command === 'admin' || command === 'help') {
+      reply = telegramAdminHelp();
+    } else if (command === 'users') {
+      const users = [...telegramState.users.values()]
+        .filter((user) => args[0] !== 'blocked' || Boolean(activeBlacklistEntry(user.userId)))
+        .sort((left, right) => (args[0] === 'recent' ? right.lastSeenAt - left.lastSeenAt : right.messageCount - left.messageCount));
+      reply = users.length ? [`用户数：${users.length}`, ...users.slice(0, 50).map((user) => `${formatTelegramUser(user)}\n最近：${formatTelegramTime(user.lastSeenAt)}，消息 ${user.messageCount}，成功 ${user.printSuccessCount}，失败 ${user.printFailedCount}`)].join('\n') : '暂无用户记录。';
+    } else if (command === 'user') {
+      targetUserId = adminCommandTarget(args);
+      if (!targetUserId) throw new Error('用法：/user <用户ID>');
+      const user = telegramState.users.get(targetUserId);
+      if (!user) { reply = '未找到该用户。'; }
+      else {
+        const blocked = activeBlacklistEntry(targetUserId);
+        reply = [`用户：${formatTelegramUser(user)}`, `首次：${formatTelegramTime(user.firstSeenAt)}`, `最近：${formatTelegramTime(user.lastSeenAt)}`, `消息：${user.messageCount}，成功 ${user.printSuccessCount}，失败 ${user.printFailedCount}，限流 ${user.limitedCount}`, `限制：${userOverrideText(targetUserId)}`, blocked ? `黑名单：${blocked.blockedUntil === null ? '永久' : formatTelegramTime(blocked.blockedUntil)}，${blocked.reason}` : '黑名单：否', `最近内容：${user.lastMessagePreview || '-'}`].join('\n');
+      }
+    } else if (command === 'messages') {
+      targetUserId = adminCommandTarget(args);
+      if (!targetUserId) throw new Error('用法：/messages <用户ID>');
+      const entries = telegramState.messages.filter((entry) => entry.userId === targetUserId).slice(-30).reverse();
+      reply = entries.length ? entries.map((entry) => `${formatTelegramTime(entry.receivedAt)} [${entry.status}] ${entry.type}\n${entry.preview}${entry.detail ? `\n原因：${entry.detail}` : ''}`).join('\n\n') : '该用户暂无消息记录。';
+    } else if (command === 'limits') {
+      reply = `全局限制：每分钟 ${telegramState.maxPerMinute === 0 ? '不限' : telegramState.maxPerMinute} 个任务；单次 ${telegramState.maxCharsPerTask === 0 ? '不限' : `${telegramState.maxCharsPerTask} 字`}。\n单用户覆盖数：${telegramState.userOverrides.size}`;
+    } else if (command === 'limit') {
+      targetUserId = adminCommandTarget(args);
+      if (!targetUserId || !['rpm', 'chars', 'reset'].includes(args[1])) throw new Error('用法：/limit <用户ID> rpm|chars <数值> [时长]，或 /limit <用户ID> reset');
+      before = userOverrideText(targetUserId);
+      if (args[1] === 'reset') {
+        telegramState.userOverrides.delete(targetUserId);
+      } else {
+        const value = Number(args[2]);
+        if (!Number.isInteger(value) || value < 0 || (args[1] === 'rpm' && value > 100) || (args[1] === 'chars' && value > 4294967295)) throw new Error('限制数值无效。');
+        const durationToken = args[3];
+        const duration = durationToken ? parseDuration(durationToken, { allowPermanent: true }) : null;
+        if (durationToken && duration === 0) throw new Error('时长格式无效，请使用 30m、2h、7d 或 perm。');
+        const old = telegramState.userOverrides.get(targetUserId) || { userId: targetUserId, maxPerMinute: null, maxCharsPerTask: null };
+        telegramState.userOverrides.set(targetUserId, {
+          ...old,
+          userId: targetUserId,
+          maxPerMinute: args[1] === 'rpm' ? value : (old.maxPerMinute ?? null),
+          maxCharsPerTask: args[1] === 'chars' ? value : (old.maxCharsPerTask ?? null),
+          expiresAt: duration === null ? null : Date.now() + duration * 60_000,
+          updatedAt: Date.now(),
+          updatedBy: userId,
+        });
+      }
+      after = userOverrideText(targetUserId);
+      saveTelegramAdminStore();
+      reply = `用户 ${targetUserId} 的限制已更新：${after}`;
+    } else if (command === 'blacklist') {
+      const entries = blacklistEntries();
+      reply = entries.length ? entries.map((entry) => `${entry.userId} ${entry.name}${entry.username ? ` (@${entry.username})` : ''}\n${entry.blockedUntil === null ? '永久' : formatTelegramTime(entry.blockedUntil)}：${entry.reason}`).join('\n\n') : '黑名单为空。';
+    } else if (command === 'block') {
+      targetUserId = adminCommandTarget(args);
+      if (!targetUserId) throw new Error('用法：/block <用户ID> [时长] [原因]');
+      const target = telegramState.users.get(targetUserId) || { userId: targetUserId, name: '未知用户', username: '' };
+      const durationToken = args[1] && /^(?:\d+(?:\.\d+)?[mhdw]|perm|permanent|永久|0)$/i.test(args[1]) ? args[1] : '';
+      const duration = durationToken ? parseDuration(durationToken, { allowPermanent: true }) : null;
+      if (durationToken && duration === 0) throw new Error('时长格式无效。');
+      const reason = truncateText(args.slice(durationToken ? 2 : 1).join(' ') || '管理员封禁', 300);
+      before = activeBlacklistEntry(targetUserId) ? '已封禁' : '未封禁';
+      setBlacklistEntry({ userId: targetUserId, name: target.name, username: target.username, blockedUntil: duration === null ? null : Date.now() + duration * 60_000, reason, strikes: 0, createdAt: Date.now(), createdBy: userId });
+      after = duration === null ? '永久封禁' : `封禁 ${duration} 分钟`;
+      reply = `用户 ${targetUserId} 已${after}。`;
+    } else if (command === 'unblock') {
+      targetUserId = adminCommandTarget(args);
+      if (!targetUserId) throw new Error('用法：/unblock <用户ID>');
+      before = activeBlacklistEntry(targetUserId) ? '已封禁' : '未封禁';
+      removeBlacklistEntry(targetUserId);
+      telegramState.rateLimitStrikes.delete(targetUserId);
+      after = '未封禁';
+      saveTelegramAdminStore();
+      reply = `用户 ${targetUserId} 已解除封禁。`;
+    } else if (command === 'status') {
+      const printed = [...telegramState.messages].filter((entry) => entry.status === 'printed').length;
+      const failed = [...telegramState.messages].filter((entry) => entry.status === 'failed').length;
+      reply = [`监听：${telegramState.running ? '运行中' : '已停止'}`, `队列：${telegramState.printQueue.length}`, `用户：${telegramState.users.size}`, `消息：${telegramState.messages.length}`, `成功：${printed}，失败：${failed}`, `黑名单：${blacklistEntries().length}`, `最近打印：${telegramState.lastMessage || '-'}`, telegramState.error ? `错误：${telegramState.error}` : '错误：无'].join('\n');
+    } else if (command === 'logs') {
+      const mode = args[0] || '';
+      let logs = telegramState.logs;
+      if (mode === 'failed' || mode === 'limited') logs = logs.filter((entry) => entry.type === mode || (mode === 'failed' && entry.type === 'reply_failed'));
+      if (mode === 'user' && parseTelegramUserId(args[1])) {
+        const userMessages = telegramState.messages.filter((entry) => entry.userId === args[1]).slice(-40).reverse();
+        reply = userMessages.length ? userMessages.map((entry) => `${formatTelegramTime(entry.receivedAt)} [${entry.status}] ${entry.preview}${entry.detail ? ` | ${entry.detail}` : ''}`).join('\n') : '暂无匹配日志。';
+      } else {
+        reply = logs.length ? logs.slice(-40).reverse().map((entry) => `${entry.time} [${entry.type}] ${entry.message}${entry.detail ? ` | ${entry.detail}` : ''}`).join('\n') : '暂无匹配日志。';
+      }
+    } else {
+      throw new Error('未知指令，请发送 /help。');
+    }
+  } catch (commandError) {
+    ok = false;
+    error = commandError.message;
+    reply = `操作失败：${error}`;
+  }
+  recordTelegramAudit(userId, text, targetUserId, before, after, ok, error);
+  for (const page of paginateTelegramText(reply)) await telegramReply(message.chat?.id, page, generation);
   return true;
 }
 
@@ -1424,16 +1773,28 @@ async function telegramLoop(generation) {
         }
         const userId = String(message.from?.id || message.chat?.id || 'unknown');
         const userProfile = { userId, name: sender, username: String(message.from?.username || '') };
+        upsertTelegramUser(userProfile, message);
+        const historyEntry = recordTelegramMessage(message, update.update_id, userProfile);
+        saveTelegramAdminStore();
         const text = typeof message.text === 'string' ? message.text : '';
         const unsupportedMessageCharacters = unsupportedCharacters(text);
         const printableMessageText = printableText(text).trim();
         const caption = typeof message.caption === 'string' ? message.caption : '';
+        if (await handleTelegramAdminCommand(message, userProfile, generation)) {
+          updateTelegramMessage(historyEntry.id, 'filtered', 'admin_command');
+          saveTelegramAdminStore();
+          continue;
+        }
         if (text.trim().startsWith('/') || caption.trim().startsWith('/')) {
+          updateTelegramMessage(historyEntry.id, 'filtered', 'telegram_command');
+          saveTelegramAdminStore();
           addTelegramLog('ignored', `${sender} 的指令已忽略`, 'telegram_command');
           continue;
         }
         const existingBlacklist = blockedUser(userId);
         if (existingBlacklist) {
+          updateTelegramMessage(historyEntry.id, 'blocked', existingBlacklist.reason);
+          saveTelegramAdminStore();
           addTelegramLog('blocked', `${sender}${userProfile.username ? `（${userProfile.username}）` : ''} 的消息已拦截`, existingBlacklist.blockedUntil === null ? '永久拉黑' : `封禁至 ${new Date(existingBlacklist.blockedUntil).toLocaleString('zh-CN')}`);
           recordRateLimit(userProfile, '封控期间再次触发频率限制');
           await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
@@ -1441,11 +1802,15 @@ async function telegramLoop(generation) {
         }
         if (message.sticker) {
           if (!telegramState.stickerEnabled) {
+            updateTelegramMessage(historyEntry.id, 'filtered', 'sticker_printing_disabled');
+            saveTelegramAdminStore();
             addTelegramLog('filtered', `${sender} 收到了 sticker，已跳过`, 'sticker_printing_disabled');
             await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
             continue;
           }
           if (message.sticker.is_animated && !telegramState.webmStickerEnabled) {
+            updateTelegramMessage(historyEntry.id, 'filtered', 'unsupported_animated_sticker');
+            saveTelegramAdminStore();
             addTelegramLog('filtered', `${sender} 收到了动画 sticker，已跳过`, 'unsupported_animated_sticker');
             await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
             continue;
@@ -1466,6 +1831,7 @@ async function telegramLoop(generation) {
             enqueuePrintMessage({
               userId,
               chatId: message.chat?.id,
+              historyId: historyEntry.id,
               printText: `${sender}：sticker`,
               nodes: [
                 ...telegramTextNodes(sender),
@@ -1473,6 +1839,8 @@ async function telegramLoop(generation) {
               ],
             }, generation);
           } catch (error) {
+            updateTelegramMessage(historyEntry.id, error.code === 'UNSUPPORTED_STICKER' ? 'filtered' : 'failed', error.message || 'sticker 处理失败');
+            saveTelegramAdminStore();
             const detail = error.message || 'sticker 处理失败';
             const unsupportedSticker = error.code === 'UNSUPPORTED_STICKER';
             addTelegramLog(unsupportedSticker ? 'filtered' : 'failed', `${sender} 的 sticker 未打印`, detail);
@@ -1482,6 +1850,8 @@ async function telegramLoop(generation) {
         }
         if (message.photo) {
           if (!telegramState.photoEnabled) {
+            updateTelegramMessage(historyEntry.id, 'filtered', 'photo_printing_disabled');
+            saveTelegramAdminStore();
             addTelegramLog('filtered', `${sender} 收到了图片，已跳过`, 'photo_printing_disabled');
             await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
             continue;
@@ -1490,6 +1860,8 @@ async function telegramLoop(generation) {
           const captionCharacters = unsupportedCharacters(caption);
           const captionLength = telegramTaskCharCount(printableCaption);
           if (printableCaption && !textTaskAllowed(userId, captionLength)) {
+            updateTelegramMessage(historyEntry.id, 'limited', `单次打印文字超过 ${effectiveTelegramRules(userId).maxCharsPerTask} 字限制`);
+            saveTelegramAdminStore();
             addTelegramLog('limited', `${sender}：${printableCaption}`, `单次打印文字超过 ${telegramState.maxCharsPerTask} 字限制`);
             await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
             continue;
@@ -1502,6 +1874,8 @@ async function telegramLoop(generation) {
             addTelegramLog('received', `${sender}：图片${printableCaption ? ` ${printableCaption}` : ''}`, photoResult.cached ? cacheHitDetail(telegramState.imageHost) : '已处理并上传图片');
             const alreadyQueuedForUser = telegramState.printQueue.some((item) => item.userId === userId);
             if (!alreadyQueuedForUser && !userTaskAllowed(userId)) {
+              updateTelegramMessage(historyEntry.id, 'limited', `超过每分钟 ${effectiveTelegramRules(userId).maxPerMinute} 条任务`);
+              saveTelegramAdminStore();
               addTelegramLog('limited', `${sender}：图片`, `超过每分钟 ${telegramState.maxPerMinute} 条任务`);
               recordRateLimit(userProfile);
               await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
@@ -1514,6 +1888,7 @@ async function telegramLoop(generation) {
             enqueuePrintMessage({
               userId,
               chatId: message.chat?.id,
+              historyId: historyEntry.id,
               kind: 'image',
               printText: `${sender}：图片${printableCaption ? ` ${printableCaption}` : ''}`,
               textLength: captionLength,
@@ -1523,6 +1898,8 @@ async function telegramLoop(generation) {
             }, generation);
             photoEnqueued = true;
           } catch (error) {
+            updateTelegramMessage(historyEntry.id, 'failed', error.message || '图片处理失败');
+            saveTelegramAdminStore();
             addTelegramLog('failed', `${sender} 的图片未打印`, error.message || '图片处理失败');
             await telegramReply(message.chat?.id, telegramState.replyPrintFailed, generation);
           } finally {
@@ -1532,6 +1909,8 @@ async function telegramLoop(generation) {
         }
         const unsupported = !printableMessageText || message.document || message.video || message.voice || message.animation || message.audio || message.contact || message.location || message.poll || message.video_note;
         if (unsupported) {
+          updateTelegramMessage(historyEntry.id, 'filtered', 'unsupported_message');
+          saveTelegramAdminStore();
           const description = `${sender} 收到了${message.sticker ? ' sticker' : message.photo ? ' 图片' : ' 非文字'}消息，已跳过`;
           addTelegramLog('filtered', description, 'unsupported_message');
           await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
@@ -1540,12 +1919,16 @@ async function telegramLoop(generation) {
         addTelegramLog('received', `${sender}：${printableMessageText}`);
         const textLength = telegramTaskCharCount(printableMessageText);
         if (!textTaskAllowed(userId, textLength)) {
+          updateTelegramMessage(historyEntry.id, 'limited', `单次打印文字超过 ${effectiveTelegramRules(userId).maxCharsPerTask} 字限制`);
+          saveTelegramAdminStore();
           addTelegramLog('limited', `${sender}：${printableMessageText}`, `单次打印文字超过 ${telegramState.maxCharsPerTask} 字限制`);
           await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
           continue;
         }
         const alreadyQueuedForUser = telegramState.printQueue.some((item) => item.userId === userId);
         if (!alreadyQueuedForUser && !userTaskAllowed(userId)) {
+          updateTelegramMessage(historyEntry.id, 'limited', `超过每分钟 ${effectiveTelegramRules(userId).maxPerMinute} 条任务`);
+          saveTelegramAdminStore();
           addTelegramLog('limited', `${sender}：${printableMessageText}`, `超过每分钟 ${telegramState.maxPerMinute} 条任务`);
           recordRateLimit(userProfile);
           await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
@@ -1555,6 +1938,7 @@ async function telegramLoop(generation) {
         enqueuePrintMessage({
           userId,
           chatId: message.chat?.id,
+          historyId: historyEntry.id,
           kind: 'text',
           printText,
           textLength,
@@ -1590,6 +1974,47 @@ async function telegramReply(chatId, text, generation) {
   }
 }
 
+const TELEGRAM_PUBLIC_COMMANDS = [
+  { command: 'start', description: '开始使用机器人' },
+  { command: 'whoami', description: '查看自己的 Telegram ID' },
+];
+const TELEGRAM_ADMIN_COMMANDS = [
+  ...TELEGRAM_PUBLIC_COMMANDS,
+  { command: 'help', description: '查看管理员帮助' },
+  { command: 'users', description: '查看用户列表' },
+  { command: 'user', description: '查看用户详情' },
+  { command: 'messages', description: '查看用户消息' },
+  { command: 'limits', description: '查看全局限流' },
+  { command: 'limit', description: '修改用户限流' },
+  { command: 'blacklist', description: '查看黑名单' },
+  { command: 'block', description: '封禁用户' },
+  { command: 'unblock', description: '解除用户封禁' },
+  { command: 'status', description: '查看机器人状态' },
+  { command: 'logs', description: '查看最近日志' },
+];
+
+async function registerTelegramCommands(apiBase, token, adminUserIds, proxyUrl) {
+  let registered = 0;
+  try {
+    await telegramRequest(apiBase, token, 'setMyCommands', { commands: TELEGRAM_PUBLIC_COMMANDS }, 10_000, proxyUrl);
+    registered += 1;
+  } catch (error) {
+    log('WARN', 'Telegram 公共命令菜单注册失败', error.message);
+  }
+  for (const userId of adminUserIds) {
+    try {
+      await telegramRequest(apiBase, token, 'setMyCommands', {
+        commands: TELEGRAM_ADMIN_COMMANDS,
+        scope: { type: 'chat', chat_id: userId },
+      }, 10_000, proxyUrl);
+      registered += 1;
+    } catch (error) {
+      log('WARN', `Telegram 管理员命令菜单注册失败（${userId}）`, error.message);
+    }
+  }
+  return registered;
+}
+
 async function startTelegram(req, res) {
   const chunks = [];
   req.on('data', (chunk) => chunks.push(chunk));
@@ -1613,6 +2038,7 @@ async function startTelegram(req, res) {
         return Number.isFinite(value) ? Math.max(0, Math.min(525600, Math.floor(value))) : [2, 10, 1440][index];
       });
       const rateLimitBlacklistOnThird = body.rate_limit_blacklist_on_third === true;
+      const requestedAdminUserIds = normalizeAdminUserIds(body.admin_user_ids);
       await telegramRequest(apiBase, body.token.trim(), 'getMe', {}, 10000, proxyUrl);
       telegramState.running = false;
       telegramState.generation += 1;
@@ -1641,20 +2067,22 @@ async function startTelegram(req, res) {
       telegramState.replyUnsupported = normalizeReply(body.reply_unsupported, '该消息类型不支持打印，请发送文字。');
       telegramState.replyRateLimited = normalizeReply(body.reply_rate_limited, '操作太频繁，请稍后再试。');
       applyImageHostSettings(body.image_host || {});
+      const hasRequestedAdminIds = Object.prototype.hasOwnProperty.call(body, 'admin_user_ids');
+      telegramState.adminUserIds = new Set(hasRequestedAdminIds
+        ? [...ENV_ADMIN_USER_IDS, ...requestedAdminUserIds]
+        : [...telegramAdminStore.adminUserIds, ...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+      saveTelegramAdminStore();
+      const commandMenusRegistered = await registerTelegramCommands(apiBase, telegramState.token, [...telegramState.adminUserIds], proxyUrl);
       telegramState.userTasks = new Map();
       telegramState.rateLimitStrikes = new Map();
-      const configuredBlacklist = Array.isArray(body.blacklist) ? body.blacklist : [];
-      telegramState.blacklist = new Map(configuredBlacklist.filter((entry) => entry && entry.userId).map((entry) => [String(entry.userId), {
-        userId: String(entry.userId), name: String(entry.name || '未知用户'), username: String(entry.username || ''),
-        blockedUntil: entry.blockedUntil === null ? null : Number(entry.blockedUntil) || null,
-        reason: String(entry.reason || '多次触发频率限制'), strikes: Number(entry.strikes) || 0, createdAt: Number(entry.createdAt) || Date.now(),
-      }]));
+      telegramState.blacklist = new Map(Object.entries(telegramAdminStore.blacklist));
+      telegramState.messageById = new Map(telegramState.messages.map((item) => [item.id, item]));
       telegramState.logs = [];
       runScheduledCacheCleanup(telegramState.imageHost).catch((error) => { imageHostCleanupState.lastError = error.message; });
       const taskLimitText = maxPerMinute === 0 ? '单个用户不限制打印任务数量' : `每位用户每分钟最多 ${maxPerMinute} 条任务`;
       const charLimitText = maxCharsPerTask === 0 ? '单次打印文字不限制字数' : `单次打印文字最多 ${maxCharsPerTask} 字`;
       const penaltyText = rateLimitBlacklistOnThird ? `封控窗口 ${rateLimitStrikeWindowMinutes} 分钟，惩罚 ${rateLimitPenaltyMinutes.join('/')} 分钟后第 3 次永久拉黑` : `封控窗口 ${rateLimitStrikeWindowMinutes} 分钟，惩罚 ${rateLimitPenaltyMinutes.join('/')} 分钟`;
-      addTelegramLog('system', `监听已启动，${taskLimitText}，${charLimitText}，${penaltyText}`);
+      addTelegramLog('system', `监听已启动，${taskLimitText}，${charLimitText}，${penaltyText}`, `已注册 ${commandMenusRegistered} 组 Telegram 命令菜单`);
       telegramState.lastMessage = '';
       telegramState.error = '';
       telegramState.retryCount = 0;
@@ -1693,6 +2121,9 @@ function telegramStatus(res) {
     error: telegramState.error,
     retryCount: telegramState.retryCount,
     logs: telegramState.logs,
+    userCount: telegramState.users.size,
+    messageCount: telegramState.messages.length,
+    queueCount: telegramState.printQueue.length,
     maxPerMinute: telegramState.maxPerMinute,
     maxCharsPerTask: telegramState.maxCharsPerTask,
     rateLimitStrikeWindowMinutes: telegramState.rateLimitStrikeWindowMinutes,

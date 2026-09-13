@@ -110,6 +110,7 @@ function currentConfig() {
       rateLimitStrikeWindowMinutes: Number($('telegramStrikeWindowMinutes').value) || 1,
       rateLimitPenaltyMinutes: [1, 2, 3].map((index) => Number($(`telegramPenalty${index}`).value) || 0),
       rateLimitBlacklistOnThird: $('telegramBlacklistOnThird').checked,
+      adminUserIds: $('telegramAdminUserIds').value.split(',').map((value) => value.trim()).filter(Boolean),
       blacklist: telegramBlacklist,
       webmStickerEnabled: $('telegramWebmStickerEnabled').checked, webmStickerFrame: $('telegramWebmFrame').value,
       photoEnabled: $('telegramPhotoEnabled').checked,
@@ -146,7 +147,7 @@ function writeBrowserConfig(config) {
   localStorage.setItem(TELEGRAM_DRAFT_KEY, JSON.stringify({ proxyEnabled: Boolean(value.telegram?.proxyEnabled), apiBase: value.telegram?.apiBase || '', token: value.telegram?.token || '' }));
   localStorage.setItem(TELEGRAM_API_KEY, value.telegram?.apiBase || '');
   localStorage.setItem(TELEGRAM_PROXY_KEY, value.telegram?.proxyUrl || '');
-  localStorage.setItem(TELEGRAM_RULES_KEY, JSON.stringify({ maxPerMinute: value.telegram?.maxPerMinute ?? 2, maxCharsPerTask: value.telegram?.maxCharsPerTask ?? 0, rateLimitStrikeWindowMinutes: value.telegram?.rateLimitStrikeWindowMinutes ?? 1, rateLimitPenaltyMinutes: value.telegram?.rateLimitPenaltyMinutes || [2, 10, 1440], rateLimitBlacklistOnThird: value.telegram?.rateLimitBlacklistOnThird === true, blacklist: value.telegram?.blacklist || [], stickerEnabled: value.telegram?.stickerEnabled !== false, webmStickerEnabled: value.telegram?.webmStickerEnabled !== false, webmStickerFrame: value.telegram?.webmStickerFrame || 'penultimate', photoEnabled: value.telegram?.photoEnabled !== false, reply_printing: value.telegram?.reply_printing || '', reply_printed: value.telegram?.reply_printed || '', reply_print_failed: value.telegram?.reply_print_failed || '', reply_unsupported: value.telegram?.reply_unsupported || '', reply_rate_limited: value.telegram?.reply_rate_limited || '', proxyEnabled: Boolean(value.telegram?.proxyEnabled) }));
+  localStorage.setItem(TELEGRAM_RULES_KEY, JSON.stringify({ maxPerMinute: value.telegram?.maxPerMinute ?? 2, maxCharsPerTask: value.telegram?.maxCharsPerTask ?? 0, rateLimitStrikeWindowMinutes: value.telegram?.rateLimitStrikeWindowMinutes ?? 1, rateLimitPenaltyMinutes: value.telegram?.rateLimitPenaltyMinutes || [2, 10, 1440], rateLimitBlacklistOnThird: value.telegram?.rateLimitBlacklistOnThird === true, adminUserIds: value.telegram?.adminUserIds || [], blacklist: value.telegram?.blacklist || [], stickerEnabled: value.telegram?.stickerEnabled !== false, webmStickerEnabled: value.telegram?.webmStickerEnabled !== false, webmStickerFrame: value.telegram?.webmStickerFrame || 'penultimate', photoEnabled: value.telegram?.photoEnabled !== false, reply_printing: value.telegram?.reply_printing || '', reply_printed: value.telegram?.reply_printed || '', reply_print_failed: value.telegram?.reply_print_failed || '', reply_unsupported: value.telegram?.reply_unsupported || '', reply_rate_limited: value.telegram?.reply_rate_limited || '', proxyEnabled: Boolean(value.telegram?.proxyEnabled) }));
   localStorage.setItem(IMAGE_HOST_KEY, JSON.stringify(value.imageHost || { provider: 'imgchr' }));
   localStorage.removeItem(SAVED_DEVICES_KEY);
 }
@@ -173,6 +174,7 @@ function applyConfig(config) {
   $('telegramStrikeWindowMinutes').value = Number.isFinite(Number(telegram.rateLimitStrikeWindowMinutes)) ? Number(telegram.rateLimitStrikeWindowMinutes) : 1;
   [1, 2, 3].forEach((index) => { $(`telegramPenalty${index}`).value = Number.isFinite(Number(telegram.rateLimitPenaltyMinutes?.[index - 1])) ? Number(telegram.rateLimitPenaltyMinutes[index - 1]) : [2, 10, 1440][index - 1]; });
   $('telegramBlacklistOnThird').checked = telegram.rateLimitBlacklistOnThird === true;
+  $('telegramAdminUserIds').value = Array.isArray(telegram.adminUserIds) ? telegram.adminUserIds.join(', ') : '';
   telegramBlacklist = Array.isArray(telegram.blacklist) ? telegram.blacklist : [];
   renderTelegramBlacklist(telegramBlacklist);
   $('telegramStickerEnabled').checked = telegram.stickerEnabled !== false;
@@ -378,6 +380,7 @@ function persistTelegramRules() {
     rateLimitStrikeWindowMinutes: Number.isFinite(Number($('telegramStrikeWindowMinutes').value)) ? Math.max(1, Math.min(1440, Math.floor(Number($('telegramStrikeWindowMinutes').value)))) : 1,
     rateLimitPenaltyMinutes: [1, 2, 3].map((index) => Number.isFinite(Number($(`telegramPenalty${index}`).value)) ? Math.max(0, Math.min(525600, Math.floor(Number($(`telegramPenalty${index}`).value)))) : [2, 10, 1440][index - 1]),
     rateLimitBlacklistOnThird: $('telegramBlacklistOnThird').checked,
+    adminUserIds: $('telegramAdminUserIds').value.split(',').map((value) => value.trim()).filter(Boolean),
     blacklist: telegramBlacklist,
     reply_printing: $('replyPrinting').value,
     reply_printed: $('replyPrinted').value,
@@ -569,6 +572,7 @@ async function startTelegram() {
     return Number.isFinite(value) ? Math.max(0, Math.min(525600, Math.floor(value))) : [2, 10, 1440][index - 1];
   });
   const rateLimitBlacklistOnThird = $('telegramBlacklistOnThird').checked;
+  const adminUserIds = $('telegramAdminUserIds').value.split(',').map((value) => value.trim()).filter(Boolean);
   const stickerEnabled = $('telegramStickerEnabled').checked;
   const webmStickerEnabled = $('telegramWebmStickerEnabled').checked;
   const webmStickerFrame = $('telegramWebmFrame').value;
@@ -588,13 +592,13 @@ async function startTelegram() {
     return;
   }
   try {
-    const response = await fetch('/api/telegram/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_base: apiBase, proxy_enabled: proxyEnabled, proxy_url: proxyUrl, max_per_minute: maxPerMinute, max_chars_per_task: maxCharsPerTask, rate_limit_strike_window_minutes: rateLimitStrikeWindowMinutes, rate_limit_penalty_minutes: rateLimitPenaltyMinutes, rate_limit_blacklist_on_third: rateLimitBlacklistOnThird, blacklist: telegramBlacklist, sticker_enabled: stickerEnabled, webm_sticker_enabled: webmStickerEnabled, webm_sticker_frame: webmStickerFrame, photo_enabled: photoEnabled, image_host: imageHostSettings, ...replies, token, ...device }) });
+    const response = await fetch('/api/telegram/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_base: apiBase, proxy_enabled: proxyEnabled, proxy_url: proxyUrl, max_per_minute: maxPerMinute, max_chars_per_task: maxCharsPerTask, rate_limit_strike_window_minutes: rateLimitStrikeWindowMinutes, rate_limit_penalty_minutes: rateLimitPenaltyMinutes, rate_limit_blacklist_on_third: rateLimitBlacklistOnThird, admin_user_ids: adminUserIds, blacklist: telegramBlacklist, sticker_enabled: stickerEnabled, webm_sticker_enabled: webmStickerEnabled, webm_sticker_frame: webmStickerFrame, photo_enabled: photoEnabled, image_host: imageHostSettings, ...replies, token, ...device }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '启动失败');
     if (storageMode === 'browser') {
       localStorage.setItem(TELEGRAM_API_KEY, apiBase);
       localStorage.setItem(TELEGRAM_PROXY_KEY, proxyUrl);
-      localStorage.setItem(TELEGRAM_RULES_KEY, JSON.stringify({ maxPerMinute, maxCharsPerTask, rateLimitStrikeWindowMinutes, rateLimitPenaltyMinutes, rateLimitBlacklistOnThird, blacklist: telegramBlacklist, stickerEnabled, webmStickerEnabled, webmStickerFrame, photoEnabled, ...replies }));
+      localStorage.setItem(TELEGRAM_RULES_KEY, JSON.stringify({ maxPerMinute, maxCharsPerTask, rateLimitStrikeWindowMinutes, rateLimitPenaltyMinutes, rateLimitBlacklistOnThird, adminUserIds, blacklist: telegramBlacklist, stickerEnabled, webmStickerEnabled, webmStickerFrame, photoEnabled, ...replies }));
     } else scheduleLocalConfigSave();
     syncTelegramActionButton(true);
     setTelegramStatus('active');
@@ -1785,6 +1789,7 @@ if (storageMode === 'browser') {
     if (Object.prototype.hasOwnProperty.call(rules, 'rateLimitStrikeWindowMinutes')) $('telegramStrikeWindowMinutes').value = rules.rateLimitStrikeWindowMinutes;
     if (Array.isArray(rules.rateLimitPenaltyMinutes)) [1, 2, 3].forEach((index) => { if (Number.isFinite(Number(rules.rateLimitPenaltyMinutes[index - 1]))) $(`telegramPenalty${index}`).value = rules.rateLimitPenaltyMinutes[index - 1]; });
     if (Object.prototype.hasOwnProperty.call(rules, 'rateLimitBlacklistOnThird')) $('telegramBlacklistOnThird').checked = rules.rateLimitBlacklistOnThird === true;
+    if (Array.isArray(rules.adminUserIds)) $('telegramAdminUserIds').value = rules.adminUserIds.join(', ');
     if (Array.isArray(rules.blacklist)) { telegramBlacklist = rules.blacklist; renderTelegramBlacklist(telegramBlacklist); }
     if (Object.prototype.hasOwnProperty.call(rules, 'stickerEnabled') || Object.prototype.hasOwnProperty.call(rules, 'sticker_enabled')) {
       const stickerEnabled = Object.prototype.hasOwnProperty.call(rules, 'stickerEnabled') ? rules.stickerEnabled : rules.sticker_enabled;

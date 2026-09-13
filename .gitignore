@@ -1,5 +1,6 @@
 config.json
 .sticker-cache.json
+.telegram-admin.json
 .DS_Store
 .playwright-cli/
 output/
