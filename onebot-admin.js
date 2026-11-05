@@ -10,7 +10,7 @@ function normalizeAdminUserIds(value) {
     .filter((item) => /^\d+$/.test(item)))];
 }
 
-function parseTelegramCommand(value) {
+function parseOneBotCommand(value) {
   const source = String(value || '').trim();
   if (!source.startsWith('/')) return null;
   const firstLine = source.split(/\r?\n/, 1)[0].trim();
@@ -25,7 +25,7 @@ function parseTelegramCommand(value) {
   };
 }
 
-function parseTelegramUserId(value) {
+function parseOneBotUserId(value) {
   const id = String(value ?? '').trim();
   return /^\d+$/.test(id) ? id : '';
 }
@@ -47,7 +47,7 @@ function truncateText(value, maxLength = MAX_PREVIEW_LENGTH) {
   return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}…` : text;
 }
 
-function paginateTelegramText(value, maxLength = 3900) {
+function paginateOneBotText(value, maxLength = 3900) {
   const text = String(value || '');
   if (!text) return [''];
   const pages = [];
@@ -79,7 +79,7 @@ function normalizeAdminStore(raw = {}, adminUserIds = []) {
   const store = emptyAdminStore([...normalizeAdminUserIds(source.adminUserIds), ...normalizeAdminUserIds(adminUserIds)]);
   const users = source.users && typeof source.users === 'object' && !Array.isArray(source.users) ? source.users : {};
   Object.entries(users).slice(-MAX_USERS).forEach(([key, value]) => {
-    const userId = parseTelegramUserId(value?.userId || key);
+    const userId = parseOneBotUserId(value?.userId || key);
     if (!userId) return;
     store.users[userId] = {
       userId,
@@ -97,7 +97,7 @@ function normalizeAdminStore(raw = {}, adminUserIds = []) {
   });
   const overrides = source.userOverrides && typeof source.userOverrides === 'object' && !Array.isArray(source.userOverrides) ? source.userOverrides : {};
   Object.entries(overrides).forEach(([key, value]) => {
-    const userId = parseTelegramUserId(value?.userId || key);
+    const userId = parseOneBotUserId(value?.userId || key);
     if (!userId || !value || typeof value !== 'object') return;
     const maxPerMinute = value.maxPerMinute === null || value.maxPerMinute === undefined ? null : Math.max(0, Math.min(100, Math.floor(Number(value.maxPerMinute))));
     const maxCharsPerTask = value.maxCharsPerTask === null || value.maxCharsPerTask === undefined ? null : Math.max(0, Math.min(4294967295, Math.floor(Number(value.maxCharsPerTask))));
@@ -108,14 +108,14 @@ function normalizeAdminStore(raw = {}, adminUserIds = []) {
       maxCharsPerTask,
       expiresAt: value.expiresAt === null || value.expiresAt === undefined ? null : Number(value.expiresAt) || null,
       updatedAt: Number(value.updatedAt) || Date.now(),
-      updatedBy: parseTelegramUserId(value.updatedBy) || String(value.updatedBy || ''),
+      updatedBy: parseOneBotUserId(value.updatedBy) || String(value.updatedBy || ''),
     };
   });
   const blacklist = source.blacklist && typeof source.blacklist === 'object' && !Array.isArray(source.blacklist)
     ? source.blacklist
     : Array.isArray(source.blacklist) ? Object.fromEntries(source.blacklist.map((item) => [String(item?.userId || ''), item])) : {};
   Object.entries(blacklist).forEach(([key, value]) => {
-    const userId = parseTelegramUserId(value?.userId || key);
+    const userId = parseOneBotUserId(value?.userId || key);
     if (!userId || !value || typeof value !== 'object') return;
     const blockedUntil = value.blockedUntil === null ? null : Number(value.blockedUntil) || null;
     store.blacklist[userId] = {
@@ -126,14 +126,14 @@ function normalizeAdminStore(raw = {}, adminUserIds = []) {
       reason: truncateText(value.reason || '管理员封禁', 300),
       strikes: Math.max(0, Number(value.strikes) || 0),
       createdAt: Number(value.createdAt) || Date.now(),
-      createdBy: parseTelegramUserId(value.createdBy) || String(value.createdBy || ''),
+      createdBy: parseOneBotUserId(value.createdBy) || String(value.createdBy || ''),
     };
   });
   store.messages = Array.isArray(source.messages) ? source.messages.slice(-MAX_MESSAGES).map((value) => ({
     id: String(value?.id || ''),
     updateId: Number(value?.updateId) || 0,
     messageId: Number(value?.messageId) || 0,
-    userId: parseTelegramUserId(value?.userId),
+    userId: parseOneBotUserId(value?.userId),
     chatId: String(value?.chatId || ''),
     receivedAt: Number(value?.receivedAt) || Date.now(),
     type: truncateText(value?.type || 'unknown', 40),
@@ -145,9 +145,9 @@ function normalizeAdminStore(raw = {}, adminUserIds = []) {
   store.auditLogs = Array.isArray(source.auditLogs) ? source.auditLogs.slice(-MAX_AUDIT_LOGS).map((value) => ({
     id: String(value?.id || ''),
     time: String(value?.time || new Date().toISOString()),
-    adminUserId: parseTelegramUserId(value?.adminUserId) || String(value?.adminUserId || ''),
+    adminUserId: parseOneBotUserId(value?.adminUserId) || String(value?.adminUserId || ''),
     command: truncateText(value?.command || '', 200),
-    targetUserId: parseTelegramUserId(value?.targetUserId) || '',
+    targetUserId: parseOneBotUserId(value?.targetUserId) || '',
     before: truncateText(value?.before || '', 500),
     after: truncateText(value?.after || '', 500),
     ok: value?.ok !== false,
@@ -162,11 +162,11 @@ module.exports = {
   MAX_AUDIT_LOGS,
   MAX_USERS,
   normalizeAdminUserIds,
-  parseTelegramCommand,
-  parseTelegramUserId,
+  parseOneBotCommand,
+  parseOneBotUserId,
   parseDuration,
   truncateText,
-  paginateTelegramText,
+  paginateOneBotText,
   emptyAdminStore,
   normalizeAdminStore,
 };

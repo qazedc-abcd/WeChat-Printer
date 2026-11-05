@@ -1,201 +1,87 @@
-# WeChat Printer
+# WeChat Printer · OneBot v11 / QQ
 
-本机运行的微信支付小票机打印工具：网页负责编辑和预览票面，本地 Node.js 服务负责调用打印接口、Telegram 和图床。服务默认只监听 `127.0.0.1`，不对局域网暴露。
+基于 [lemonno2333/WeChat-Printer](https://github.com/lemonno2333/WeChat-Printer) 的 OneBot v11 适配版。保留小票编辑、预览、图片处理、图床、设备 JSON 导入和打印接口，将 Telegram 接入替换为本地 OneBot v11 正向 WebSocket，主要用于 NapCat / LLOneBot 等 QQ 框架。
 
-## 界面预览
+## 启动
 
-![WeChat Printer 小票编辑页面](docs/screenshot.jpg)
+Windows 免安装包完整解压后运行根目录 `start-local.bat`。自带 Node.js，无需安装 npm 依赖。
 
-## 功能
+源码运行需要 **Node.js 22+**，直接执行：
 
-- 文本打印：文字、放大文字、空行、图片、二维码、表格。
-- 票面预览，支持开发者模式直接编辑请求 JSON。
-- 图片处理：1:1 裁剪、缩放、伽马/对比度调整、透明背景处理、280×280 Floyd–Steinberg 黑白化。
-- Telegram 转发：私聊文字/图片/WebP sticker（可选 WebM），按消息顺序合并打印，识别粗体/斜体/链接（链接自动生成二维码）。
-- 图床：支持 Imgchr、CloudFlare ImgBed。
-- 打印保护：过滤已知无法打印的字符。
-- 本地日志：控制台输出请求、打印、Telegram、图床与错误信息。
-
-## 系统要求
-
-- Node.js 18+
-- 现代浏览器
-- 已绑定微信收款设备的微信小票机
-- 如需要处理 Telegram sticker 则需安装 `ffmpeg`（WebM 抽帧还需 `ffprobe`）
-
-无 `package.json`，仅用 Node.js 内置模块，无需 `npm install`。
-
-## 快速开始
-
-先克隆本仓库并进入项目目录：
-
-```bash
-git clone https://github.com/lemonno2333/WeChat-Printer.git
-cd WeChat-Printer
-```
-
-**macOS**：双击 `start-local.command`，或：
-
-```bash
+```sh
 node start-local.js
 ```
 
-**Windows**：双击 `start-local.bat`，或：
-```bat
-node start-local.js
-```
+默认页面：<http://127.0.0.1:4180>。只启动服务用 `node server.js`，Ctrl+C 停止。`HOST` 默认 `127.0.0.1`，`PORT` 可覆盖默认端口。
 
-启动后访问 <http://127.0.0.1:4173>。只启动服务（不开浏览器）用 `node server.js`；`Ctrl+C` 停止。
+## 连接 QQ
 
-若 macOS 阻止脚本运行：`chmod +x start-local.command`。
+1. 在“文本打印”中填设备 SN、SID 和 account_type，或从 SID 助手导出的 JSON 导入。SID 有有效期，失效后重新获取。
+2. 登录本机 NapCat / LLOneBot，启用 OneBot v11 **正向 WebSocket**，并让接口提供 API 和事件。
+3. 打开“消息监听”，填根路径，例如 `ws://127.0.0.1:3001`。不要填写只提供 API 或事件的 `/api`、`/event` 子路径。
+4. QQ 框架没有配置鉴权时，访问令牌留空；配置了则填写相同令牌。
+5. 点击“开始监听”。启动会通过 `get_login_info` 检查 QQ 登录，不需要 Telegram Bot Token、Telegram 代理或反向事件回调。
+6. 给已登录的 QQ 发送私聊文字或图片，即进入打印队列。仅在用户主动开始后监听；关闭页面不会自动停止服务，可在页面点击“停止监听”或结束服务。
 
-## 第一次使用
+OneBot v11 接口与消息格式以 [OneBot 11 标准](https://github.com/botuniverse/onebot-11) 为准。连接中断后最多重试三次；达到上限会停止，可手动重新开始。
 
-1. “文本打印”的“设备与接口”中填写设备 SN、SID 和 `account_type`；三项都必填。
-2. 也可以点击“从 JSON 导入”，粘贴包含这三项的请求 JSON，自动保存并选中设备。
-3. 添加对应节点，检查预览，点击“发送打印”即可。
-4. 如需 Telegram 转发：在“消息监听”填写 Bot Token；设备 SN、SID 和 `account_type` 会复用“文本打印”中的唯一 `device`，点击“开始监听”即可。
-5. 如需打印 Telegram 图片/sticker：确认“图床设置”可用。
+## 消息与打印
 
-设备和 Telegram 配置可存浏览器，也可在设置中切换为项目目录下的 `config.json`。
+- 仅处理 QQ 私聊。群聊、机器人自发消息和心跳不会打印。
+- 支持标准消息段数组，也支持 CQ 码字符串；正文、图片和后续正文按原顺序处理。
+- 发送者使用 QQ 昵称，缺少昵称时使用 QQ 号；同一批连续 500ms 的消息按队列顺序合并。
+- QQ 表情以 `[表情:ID]` 文本表示；自定义表情若作为 image 消息段上报，按图片处理。@ 使用文字标记，回复引用元数据忽略，链接可以生成二维码。
+- 文件、语音、视频及其他不支持类型会按设置回复并跳过。
+- API 回复通过 `send_private_msg` 的纯文本消息段发送，避免把回复正文中的 CQ 片段作为可执行消息段解释。
+- 图片优先使用上报的 HTTP(S) URL；需要时调用 `get_image` 获取 URL 或 QQ 框架解析出的本地文件。不会直接读取聊天消息给出的本地路径。
+- 图片处理需要另外安装 **FFmpeg**，可通过 `WECHAT_PRINTER_FFMPEG` 指定可执行文件。免安装包未包含 FFmpeg。
+- 图片会经过 280×280 白底缩放与 Floyd–Steinberg 黑白抖动，再上传所选图床；保留 Imgchr / CloudFlare ImgBed 设置。QQ 图片链接不会原样直接交给小票机。
 
-首次使用本地配置时，可复制示例并替换其中的占位值：
+## 限流和管理员
 
-```bash
-cp config.example.json config.json
-```
+保留单用户每分钟任务数、单任务字数、升级封禁、黑名单、管理员审计和状态日志。管理员设置改为 **QQ 号**，或使用 `ONEBOT_ADMIN_USER_IDS` 环境变量，多个以逗号分隔。
 
-`config.json` 可能包含 Bot Token、代理地址和图床凭据，请勿提交或分享；`config.example.json` 仅包含示例占位值。
+用户可私聊发送 `/whoami` 查看 QQ 号；管理员可使用 `/help`、`/users`、`/user`、`/messages`、`/limits`、`/limit`、`/blacklist`、`/block`、`/unblock`、`/status`、`/logs`。非管理员不能执行管理操作。命令不进入打印队列。
 
-示例中的 `device` 是唯一设备配置，包含 SN、SID 和 `accountType`；文本打印、设备保存入口和 Telegram 会复用这组信息，`savedDevices` 以及 `telegram` 下的设备字段不再单独保存。JSON 不支持注释，因此示例中的 `__说明` 字段用于文字说明，程序会忽略它。
+## 配置和数据
 
-## 日志
+浏览器保存模式与 `config.json` 本地保存模式均保留。示例见 `config.example.json`，OneBot 配置在 `onebot` 节点。不会把旧 Telegram Token 或管理员 ID 自动当作 QQ 配置使用。
 
-日志只输出到控制台，不写入本地文件，且不记录查询参数。级别：`INFO`（正常事件）、`WARN`（过滤/限流/非 2xx）、`ERROR`（网络/图床/打印/Telegram 异常）。
-
-## Telegram 监听
-
-普通消息仅处理私聊文字与图片/sticker；群聊和频道会被忽略。配置了 `telegram.adminUserIds` 后，管理员还可以通过私聊指令查看用户、调整限流和管理黑名单。
-
-- 500ms 内的连续消息合并为一批，按 Telegram 消息顺序排列（文字在前则先文字后图，反之亦然），caption 直接打印在图片下方。
-- 可限制单批字数、每用户每分钟任务数，并自定义打印中/完成/失败/过滤/限流的回复文案。
-- 图片统一缩放到 280×280 白底画布后黑白化；WebM sticker 可选取首帧/第二帧/倒数第二帧/末帧。
-- 相同媒体按 `file_unique_id` 缓存处理结果，避免重复处理。Imgchr 默认缓存 7 天；ImgBed 缓存天数可配置（`0` 为永不过期）。
-
-### Telegram 管理员指令
-
-管理员 ID 使用 Telegram 数字 `user_id`，可在网页“消息监听 → 回复与限制”的管理员字段中填写，也可以写入 `config.json` 的 `telegram.adminUserIds` 数组或使用环境变量 `TELEGRAM_ADMIN_USER_IDS`（多个 ID 用逗号分隔）。给 Bot 发送 `/whoami` 可以查看自己的 ID，再将 ID 配置为管理员后重启或重新开始监听。
-
-管理员指令仅在私聊生效，并且不会进入打印队列：
-
-```text
-/help                         查看帮助
-/users [recent|blocked]       查看用户
-/user <用户ID>                查看用户详情
-/messages <用户ID>            查看最近消息和处理结果
-/limits                       查看全局限流
-/limit <用户ID> rpm <数值> [时长]
-/limit <用户ID> chars <字数> [时长]
-/limit <用户ID> reset         恢复全局限制
-/blacklist                    查看黑名单
-/block <用户ID> [时长] [原因]  封禁用户（默认永久，时长如 2h/7d）
-/unblock <用户ID>              解除封禁
-/status                       查看监听、队列和统计
-/logs [failed|limited|user <用户ID>] 查看日志
-```
-
-用户资料、最近消息、单用户限制、黑名单和管理员审计记录保存在服务端的 `.telegram-admin.json`，与浏览器或本地配置保存模式无关。该文件可能包含用户消息预览，请不要提交到版本库或分享；消息和审计记录会自动限制数量。
-
-## 图床配置
-
-**Imgchr**：无需凭据，需能访问 `imgchr.com`。
-
-**CloudFlare ImgBed**：需填写根地址，可选配置 API Token、上传认证码、上传渠道、缓存天数、自动删除过期图片（需 Token 具备 `upload`+`delete` 权限）。
-
-## 图片打印
-
-图片可以本地上传，也可以直接填写在线 URL 打印。本地上传会依次裁剪、调整参数并生成 280×280 黑白 PNG 后上传取直链；填 URL 则不重新上传，预览通过 `/api/image` 代理。
-
-## 开发者模式
-
-可直接编辑打印请求 JSON；发送前校验根节点、`device_sn`、`sid` 和 `account_type`。
-
-约束：表格最多 16 列且每行列数固定（不支持合并单元格/跨列）；文字用 `text.column[].value`；放大文字/表格支持 `height`/`width` 的 0/1/2 倍率；二维码为 `icon.type = 1`，尺寸由设备固定；已知无法打印字符会统一过滤。
-
-## 配置与运行时文件
-
-| 文件 | 说明 |
+| 文件 | 用途 |
 | --- | --- |
-| `config.json` | 本地配置文件，可能含 Bot Token、代理地址、图床凭据（明文，切勿提交或分享）。 |
-| `config.example.json` | 可复制使用的本地配置示例，不含真实凭据；`__说明` 字段包含使用提示。 |
-| `.sticker-cache.json` | Telegram 图片/sticker 处理结果缓存。 |
-| `.telegram-admin.json` | Telegram 管理员数据、用户资料、消息预览、单用户限制、黑名单和审计记录；包含隐私数据，切勿提交或分享。 |
-| `output/` | 已有输出目录，非运行必需。 |
+| `config.json` | 设备 SID、OneBot 访问令牌、图床设置；不要提交或分享 |
+| `.onebot-admin.json` | QQ 用户、消息预览、限流、黑名单和审计记录；不要提交或分享 |
+| `.onebot-media-cache.json` | QQ 图片处理后的图床缓存 |
+| `config.example.json` | 仅占位值的配置示例 |
 
-## 环境变量
-
-| 变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | 监听地址（非必要不要改为 `0.0.0.0`）。 |
-| `PORT` | `4173` | 监听端口。 |
-| `WECHAT_PRINTER_FFMPEG` | `ffmpeg` | FFmpeg 路径。 |
-| `WECHAT_PRINTER_FFPROBE` | `ffprobe` | FFprobe 路径。 |
-| `TELEGRAM_ADMIN_USER_IDS` | 空 | Telegram 数字管理员 ID，多个 ID 用逗号分隔；可替代配置文件中的 `adminUserIds`。 |
-
-## 开发与测试
-
-```bash
-for test in *.test.js; do node "$test" || exit 1; done
-node --check server.js
-node --check start-local.js
-```
+这些运行时文件已加入 Git 忽略规则，发布包不包含个人配置。图床上传渠道中的 Telegram 是 CloudFlare ImgBed 自己的存储渠道，保留其合法枚举，不代表仍连接 Telegram Bot API。
 
 ## HTTP 接口
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `GET` | `/` | 网页界面 |
-| `POST` | `/api/print?sid=...` | 转发打印请求 |
-| `GET/POST/DELETE` | `/api/config` | 读取/保存/清除本地配置 |
-| `POST` | `/api/image-host/upload` | 上传处理后的图片 |
-| `POST` | `/api/settings/image-host` | 更新图床设置 |
-| `POST` | `/api/telegram/start` | 开始 Telegram 监听 |
-| `POST` | `/api/telegram/stop` | 停止监听 |
-| `GET` | `/api/telegram/status` | 监听状态与日志 |
-| `GET` | `/api/telegram/blacklist` | 查看封控用户 |
-| `DELETE` | `/api/telegram/blacklist/:userId` | 解除封控 |
-| `GET` | `/api/image?url=...` | 图片预览代理 |
+| GET | `/` | 网页界面 |
+| POST | `/api/print?sid=...` | 手动打印请求 |
+| GET / POST / DELETE | `/api/config` | 本地配置 |
+| POST | `/api/onebot/start` | 连接 OneBot v11 并启动监听 |
+| POST | `/api/onebot/stop` | 停止监听并关闭连接 |
+| GET | `/api/onebot/status` | 状态、日志、队列和限制 |
+| GET | `/api/onebot/blacklist` | 黑名单 |
+| DELETE | `/api/onebot/blacklist/:userId` | 解除限制 |
+| POST | `/api/onebot/logs/clear` | 清空日志 |
 
-本地 HTTP 接口仍仅供本机网页使用；Telegram 管理员指令通过数字 `user_id` 白名单认证，不要把 Bot Token、设备 SID 或图床凭据放进管理员回复。
+原 `/api/telegram/*` 接口已移除。本程序是 OneBot 客户端，不实现 QQ 登录，也不是新的 OneBot 服务端。
 
-## 故障排查
+## 验证
 
-- **端口占用**：`PORT=4174 node start-local.js`
-- **页面打不开**：确认终端出现 `local app is running`，手动访问对应端口
-- **打印失败**：查看终端 `打印接口请求失败`/`打印失败` 日志，在开发者模式检查 HTTP 状态与响应体；重点排查 SN/SID/网络
-- **Telegram 无法连接**：检查 Bot Token、SN、SID、API 地址、代理；`开始监听` 会先校验 Token（`getMe`），轮询失败会显示重试与错误原因
-- **sticker 处理失败**：终端运行 `ffmpeg -version` / `ffprobe -version` 确认已安装，或用环境变量指定路径
-
-## 项目结构
-
-```text
-.
-├── index.html
-├── styles.css
-├── app.js
-├── server.js
-├── printable-text.js
-├── telegram-layout.js
-├── print-response.js
-├── start-local.js
-├── start-local.command
-└── start-local.bat
+```powershell
+Get-ChildItem *.test.js | ForEach-Object { node $_.FullName; if ($LASTEXITCODE) { throw $_.Name } }
 ```
 
-## 延伸阅读
+测试包括原有文本、SID 错误识别、管理员和票面排版，以及真实 WebSocket mock 的 RPC echo、访问令牌、事件转换、CQ 码、去重、超时、断线重连、停止竞争条件、模拟打印接口的端到端测试。测试不连接真实 QQ 联系人或打印设备。
 
-如果想了解小票机更详细的打印能力范围，可以移步至[微信小票机 P4 的不完全折腾笔记](https://lemonno.xyz/archives/P4.html)。
+本机已对运行中的 NapCat 做过只读 `get_login_info` 连接检查，确认正向 WebSocket 可用；图片真实设备输出仍取决于 FFmpeg、图床和小票机。
 
-## 许可证
+## 许可
 
-本项目采用 [MIT License](LICENSE)。
+沿用上游 MIT License，见 `LICENSE`。打印排版、图床和基础界面来自原项目，OneBot 适配为本分支新增。

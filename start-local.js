@@ -2,7 +2,7 @@ const { spawn } = require('child_process');
 const http = require('http');
 const path = require('path');
 
-const PORT = Number(process.env.PORT) || 4173;
+const PORT = Number(process.env.PORT) || 4180;
 const HOST = process.env.HOST || '127.0.0.1';
 const root = __dirname;
 const server = spawn(process.execPath, [path.join(root, 'server.js')], {

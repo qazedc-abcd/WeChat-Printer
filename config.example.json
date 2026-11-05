@@ -5,11 +5,9 @@
     "sid": "YOUR_DEVICE_SID",
     "accountType": 2
   },
-  "telegram": {
-    "apiBase": "https://api.telegram.org",
-    "token": "YOUR_TELEGRAM_BOT_TOKEN",
-    "proxyEnabled": false,
-    "proxyUrl": "",
+  "onebot": {
+    "apiBase": "ws://127.0.0.1:3001",
+    "token": "",
     "maxPerMinute": 2,
     "maxCharsPerTask": 0,
     "rateLimitStrikeWindowMinutes": 1,
@@ -21,9 +19,6 @@
     "rateLimitBlacklistOnThird": false,
     "adminUserIds": [],
     "blacklist": [],
-    "stickerEnabled": true,
-    "webmStickerEnabled": true,
-    "webmStickerFrame": "penultimate",
     "photoEnabled": true,
     "reply_printing": "正在打印，请稍候。",
     "reply_printed": "已打印。",

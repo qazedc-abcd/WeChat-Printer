@@ -1,6 +1,9 @@
 config.json
-.sticker-cache.json
+.onebot-media-cache.json
+.onebot-admin.json
 .telegram-admin.json
+.sticker-cache.json
 .DS_Store
 .playwright-cli/
 output/
+dist/

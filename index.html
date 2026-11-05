@@ -21,7 +21,7 @@
         </div>
         <nav class="topnav" aria-label="功能导航">
           <button class="topnav-link active" id="textPrintNav" type="button" data-view="textView" aria-label="文本打印"><i data-lucide="file-text"></i><span>文本打印</span></button>
-          <button class="topnav-link" id="messageListenNav" type="button" data-view="messageView" aria-label="消息监听"><i data-lucide="radio"></i><span>消息监听</span><span class="nav-status-dot" id="navTelegramDot"></span></button>
+          <button class="topnav-link" id="messageListenNav" type="button" data-view="messageView" aria-label="消息监听"><i data-lucide="radio"></i><span>消息监听</span><span class="nav-status-dot" id="navOneBotDot"></span></button>
           <button class="topnav-link" id="developerModeNav" type="button" data-view="textView" data-mode="developer" aria-label="开发者模式"><i data-lucide="braces"></i><span>开发者模式</span></button>
           <button class="topnav-link" id="settingsNav" type="button" data-view="settingsView" aria-label="设置"><i data-lucide="settings"></i><span>设置</span></button>
         </nav>
@@ -105,7 +105,7 @@
               <button class="button secondary" id="clearForm" type="button"><i data-lucide="eraser"></i><span>清空内容</span></button>
               <button class="button primary" id="printButton" type="button"><i data-lucide="printer"></i><span>发送打印</span></button>
             </div>
-            <p class="form-note"><i data-lucide="shield-check"></i>设备 SN、SID、account_type 和 Telegram 配置会保存在当前浏览器，下次打开程序自动恢复。</p>
+            <p class="form-note"><i data-lucide="shield-check"></i>设备 SN、SID、account_type 和 OneBot 配置会保存在当前浏览器，下次打开程序自动恢复。</p>
           </section>
 
           <section class="right-column">
@@ -161,8 +161,8 @@
           <section class="intro-row">
             <div>
               <p class="section-kicker">MESSAGE LISTENER</p>
-              <h2>让 Telegram 消息，<em>自动变成小票。</em></h2>
-              <p class="intro-copy">绑定 Telegram Bot 后，机器人收到私聊文字、图片或已开启的 WebP/WebM sticker 会转发到指定小票机。</p>
+              <h2>让 QQ 消息，<em>自动变成小票。</em></h2>
+              <p class="intro-copy">连接本地 OneBot v11 服务后，把 QQ 私聊文字和图片转发到指定小票机。</p>
             </div>
             <div class="status-chip" data-state="idle"><span class="status-pulse" id="messageStatusPulse"></span><span id="messageStatusText">未连接</span></div>
           </section>
@@ -170,45 +170,40 @@
           <div class="message-grid">
             <section class="panel form-panel">
               <div class="panel-heading"><div><p class="panel-index">01 / TARGET</p><h3>接收设备（共用 device）</h3></div><i data-lucide="printer" class="panel-icon"></i></div>
-              <div class="field-group"><label for="telegramDeviceSn">设备 SN <span class="required">必填</span></label><input id="telegramDeviceSn" type="text" placeholder="例如：SN202408220001" autocomplete="off" /><p class="field-help">Telegram 消息将打印到“文本打印”中的唯一 device，任意一处修改都会同步。</p></div>
-              <div class="field-group"><label for="telegramSid">设备 SID <span class="required">必填</span></label><input id="telegramSid" type="text" placeholder="例如：wx-smart-device-sid" autocomplete="off" /></div>
-              <div class="field-group"><label for="telegramAccountType">account_type <span class="required">必填</span></label><input id="telegramAccountType" type="text" inputmode="numeric" placeholder="例如：2" autocomplete="off" required /></div>
-              <div class="device-save-row message-device-row"><select id="telegramSavedDevice" aria-label="选择已保存设备"><option value="">选择已保存设备</option></select><button class="button device-save-button" id="useSavedTelegramDevice" type="button"><i data-lucide="download"></i><span>调用已保存设备</span></button></div>
+              <div class="field-group"><label for="onebotDeviceSn">设备 SN <span class="required">必填</span></label><input id="onebotDeviceSn" type="text" placeholder="例如：SN202408220001" autocomplete="off" /><p class="field-help">OneBot 消息将打印到“文本打印”中的唯一 device，任意一处修改都会同步。</p></div>
+              <div class="field-group"><label for="onebotSid">设备 SID <span class="required">必填</span></label><input id="onebotSid" type="text" placeholder="例如：wx-smart-device-sid" autocomplete="off" /></div>
+              <div class="field-group"><label for="onebotAccountType">account_type <span class="required">必填</span></label><input id="onebotAccountType" type="text" inputmode="numeric" placeholder="例如：2" autocomplete="off" required /></div>
+              <div class="device-save-row message-device-row"><select id="onebotSavedDevice" aria-label="选择已保存设备"><option value="">选择已保存设备</option></select><button class="button device-save-button" id="useSavedOneBotDevice" type="button"><i data-lucide="download"></i><span>调用已保存设备</span></button></div>
               <div class="message-link-card"><i data-lucide="info"></i><p>设备 SN / SID / account_type 可在“文本打印”页面保存后，在这里直接调用。</p></div>
             </section>
 
             <section class="panel form-panel">
-              <div class="panel-heading"><div><p class="panel-index">02 / TELEGRAM</p><h3>消息监听</h3></div><span class="telegram-status" id="telegramStatus">未连接</span></div>
-              <form id="telegramForm">
-                <p class="field-help telegram-description">只处理私聊中的文字、图片和已开启的 WebP/WebM sticker；文字按“姓名：消息”打印，图片与 sticker 会在图片上方居中打印姓名，并保持比例缩放、水平居中贴底，空白区域填充白色。</p>
-                <label class="telegram-token-label" for="telegramApiBase">Telegram API 地址</label>
-                <input id="telegramApiBase" type="url" value="https://api.telegram.org" placeholder="https://api.telegram.org" autocomplete="url" spellcheck="false" />
-                <p class="field-help telegram-api-help">支持兼容 Bot API 的镜像基础地址。Token 会发送给该服务，请只使用可信镜像。</p>
-                <div class="proxy-toggle-row"><label class="switch-label" for="telegramProxyEnabled"><input id="telegramProxyEnabled" type="checkbox" /><span class="switch-ui"></span><span>通过 HTTP 代理访问 Telegram</span></label><span class="proxy-state" id="telegramProxyState">直连</span></div>
-                <div class="proxy-field hidden-proxy" id="telegramProxyField"><label class="telegram-token-label" for="telegramProxyUrl">HTTP 代理地址</label><input id="telegramProxyUrl" type="url" placeholder="例如：http://127.0.0.1:7890" autocomplete="url" spellcheck="false" /><p class="field-help">代理只用于 Telegram API，不影响微信打印。</p></div>
-                <label class="telegram-token-label" for="telegramToken">Bot Token</label>
-                <input id="telegramToken" type="password" placeholder="粘贴 BotFather 生成的 Bot Token" autocomplete="off" />
-                <div class="telegram-actions"><button class="button telegram-start" id="startTelegram" type="submit"><i data-lucide="radio"></i><span>开始监听</span></button></div>
+              <div class="panel-heading"><div><p class="panel-index">02 / ONEBOT V11 · QQ</p><h3>消息监听</h3></div><span class="onebot-status" id="onebotStatus">未连接</span></div>
+              <form id="onebotForm">
+                <p class="field-help onebot-description">接收 QQ 私聊的文字和图片，按消息段原顺序合并打印；使用 QQ 昵称标识发送者。群聊、自发消息和心跳事件不会打印。图片经 FFmpeg 缩放、白底填充与黑白抖动后上传图床。</p>
+                <label class="onebot-token-label" for="onebotApiBase">OneBot v11 正向 WebSocket 地址</label>
+                <input id="onebotApiBase" type="text" value="ws://127.0.0.1:3001" placeholder="ws://127.0.0.1:3001" autocomplete="url" spellcheck="false" />
+                <p class="field-help onebot-api-help">适用于本机 NapCat / LLOneBot。填写提供 API 与事件的根路径，如 ws://127.0.0.1:3001；无需修改 QQ 端配置。</p>
+                <label class="onebot-token-label" for="onebotToken">访问令牌（可选）</label>
+                <input id="onebotToken" type="password" placeholder="OneBot 未配置鉴权时留空" autocomplete="off" />
+                <div class="onebot-actions"><button class="button onebot-start" id="startOneBot" type="submit"><i data-lucide="radio"></i><span>开始监听</span></button></div>
               </form>
-              <div class="telegram-result"><p class="panel-index">LAST EVENT</p><p class="telegram-last" id="telegramLast">未收到消息</p></div>
+              <div class="onebot-result"><p class="panel-index">LAST EVENT</p><p class="onebot-last" id="onebotLast">未收到消息</p></div>
             </section>
 
-            <section class="panel form-panel telegram-settings-panel">
+            <section class="panel form-panel onebot-settings-panel">
               <div class="panel-heading"><div><p class="panel-index">03 / RULES</p><h3>回复与限制</h3></div><i data-lucide="sliders-horizontal" class="panel-icon"></i></div>
-              <div class="field-group"><label for="telegramMaxPerMinute">单个用户每分钟最多打印任务</label><input id="telegramMaxPerMinute" type="number" min="0" max="100" value="2" inputmode="numeric" /><p class="field-help">填写 0 表示不限制；关闭的图片、sticker 和其他不支持消息不占用额度。</p></div>
-              <div class="field-group"><label for="telegramMaxCharsPerTask">单个用户一次最多打印字数</label><input id="telegramMaxCharsPerTask" type="number" min="0" max="4294967295" value="0" inputmode="numeric" /><p class="field-help">填写 0 表示不限制；只计算文字消息正文，同一批次 500ms 内的多条文字会累计计算。</p></div>
-              <div class="settings-two-column telegram-penalty-grid">
-                <div class="field-group"><label for="telegramStrikeWindowMinutes">限流统计窗口（分钟）</label><input id="telegramStrikeWindowMinutes" type="number" min="1" max="1440" value="1" inputmode="numeric" /><p class="field-help">在此时间内重复触发限流会升级封控。</p></div>
-                <div class="field-group"><label for="telegramPenalty1">第 1 次封禁分钟数</label><input id="telegramPenalty1" type="number" min="0" max="525600" value="2" inputmode="numeric" /></div>
-                <div class="field-group"><label for="telegramPenalty2">第 2 次封禁分钟数</label><input id="telegramPenalty2" type="number" min="0" max="525600" value="10" inputmode="numeric" /></div>
-                <div class="field-group"><label for="telegramPenalty3">第 3 次封禁分钟数</label><input id="telegramPenalty3" type="number" min="0" max="525600" value="1440" inputmode="numeric" /><p class="field-help">0 表示该档不临时封禁。</p></div>
+              <div class="field-group"><label for="onebotMaxPerMinute">单个用户每分钟最多打印任务</label><input id="onebotMaxPerMinute" type="number" min="0" max="100" value="2" inputmode="numeric" /><p class="field-help">填写 0 表示不限制；关闭的图片和其他不支持消息不占用额度。</p></div>
+              <div class="field-group"><label for="onebotMaxCharsPerTask">单个用户一次最多打印字数</label><input id="onebotMaxCharsPerTask" type="number" min="0" max="4294967295" value="0" inputmode="numeric" /><p class="field-help">填写 0 表示不限制；只计算文字消息正文，同一批次 500ms 内的多条文字会累计计算。</p></div>
+              <div class="settings-two-column onebot-penalty-grid">
+                <div class="field-group"><label for="onebotStrikeWindowMinutes">限流统计窗口（分钟）</label><input id="onebotStrikeWindowMinutes" type="number" min="1" max="1440" value="1" inputmode="numeric" /><p class="field-help">在此时间内重复触发限流会升级封控。</p></div>
+                <div class="field-group"><label for="onebotPenalty1">第 1 次封禁分钟数</label><input id="onebotPenalty1" type="number" min="0" max="525600" value="2" inputmode="numeric" /></div>
+                <div class="field-group"><label for="onebotPenalty2">第 2 次封禁分钟数</label><input id="onebotPenalty2" type="number" min="0" max="525600" value="10" inputmode="numeric" /></div>
+                <div class="field-group"><label for="onebotPenalty3">第 3 次封禁分钟数</label><input id="onebotPenalty3" type="number" min="0" max="525600" value="1440" inputmode="numeric" /><p class="field-help">0 表示该档不临时封禁。</p></div>
               </div>
-              <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramBlacklistOnThird"><input id="telegramBlacklistOnThird" type="checkbox" /><span class="switch-ui"></span><span>第三次触发后永久拉黑</span></label><span class="proxy-state">默认关闭</span></div>
-              <div class="field-group"><label for="telegramAdminUserIds">管理员 Telegram user_id</label><input id="telegramAdminUserIds" type="text" inputmode="numeric" placeholder="例如：123456789，可用逗号分隔多个 ID" autocomplete="off" /><p class="field-help">先给 Bot 发送 /whoami 获取 ID。仅这些 ID 可执行 Telegram 管理员指令；也可用环境变量配置。</p></div>
-              <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramStickerEnabled"><input id="telegramStickerEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印 WebP sticker</span></label><span class="proxy-state" id="telegramStickerState">已开启</span></div>
-              <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramWebmStickerEnabled"><input id="telegramWebmStickerEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印 WebM sticker</span></label><span class="proxy-state" id="telegramWebmStickerState">已开启</span></div>
-              <div class="field-group compact-field"><label for="telegramWebmFrame">WebM sticker 打印帧</label><select id="telegramWebmFrame"><option value="first">第一帧</option><option value="second">第二帧</option><option value="penultimate" selected>倒数第二帧（默认）</option><option value="last">最后一帧</option></select><p class="field-help">程序会先读取 WebM 总帧数，再精确选择目标帧；只有开启 WebM 打印时生效。</p></div>
-              <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="telegramPhotoEnabled"><input id="telegramPhotoEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印图片消息</span></label><span class="proxy-state" id="telegramPhotoState">已开启</span></div>
+              <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="onebotBlacklistOnThird"><input id="onebotBlacklistOnThird" type="checkbox" /><span class="switch-ui"></span><span>第三次触发后永久拉黑</span></label><span class="proxy-state">默认关闭</span></div>
+              <div class="field-group"><label for="onebotAdminUserIds">管理员 QQ 号</label><input id="onebotAdminUserIds" type="text" inputmode="numeric" placeholder="例如：123456789，可用逗号分隔多个 ID" autocomplete="off" /><p class="field-help">在 QQ 私聊中发送 /whoami 可查看 QQ 号。仅这些 QQ 号可执行管理员指令；也可用环境变量 ONEBOT_ADMIN_USER_IDS 配置。</p></div>
+              <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="onebotPhotoEnabled"><input id="onebotPhotoEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印图片消息</span></label><span class="proxy-state" id="onebotPhotoState">已开启</span></div>
               <div class="reply-fields">
                 <div class="field-group"><label for="replyPrinting">开始打印时回复</label><input id="replyPrinting" type="text" value="正在打印，请稍候。" maxlength="500" /></div>
                 <div class="field-group"><label for="replyPrinted">打印成功时回复</label><input id="replyPrinted" type="text" value="已打印。" maxlength="500" /></div>
@@ -218,16 +213,16 @@
               </div>
             </section>
           </div>
-          <section class="panel telegram-blacklist-panel">
+          <section class="panel onebot-blacklist-panel">
             <div class="panel-heading"><div><p class="panel-index">BLACKLIST</p><h3>黑名单管理</h3></div><i data-lucide="shield-ban" class="panel-icon"></i></div>
-            <p class="field-help telegram-blacklist-help">格式：用户名称（用户名）：封禁时间，封禁原因。临时封禁到期后会自动移除，也可以手动解除。</p>
-            <div class="telegram-blacklist-list" id="telegramBlacklistList"><div class="telegram-blacklist-empty">暂无封禁用户。</div></div>
+            <p class="field-help onebot-blacklist-help">格式：用户名称（用户名）：封禁时间，封禁原因。临时封禁到期后会自动移除，也可以手动解除。</p>
+            <div class="onebot-blacklist-list" id="onebotBlacklistList"><div class="onebot-blacklist-empty">暂无封禁用户。</div></div>
           </section>
-          <section class="panel telegram-log-panel">
-            <div class="panel-heading"><div><p class="panel-index">LIVE LOG</p><h3>日志输出台</h3></div><button class="copy-button" id="clearTelegramLogs" type="button"><i data-lucide="trash-2"></i><span>清空日志</span></button></div>
-            <div class="telegram-log-list" id="telegramLogList"><div class="telegram-log-empty">监听启动后，这里会显示收到的消息、过滤结果、打印状态和回复状态。</div></div>
+          <section class="panel onebot-log-panel">
+            <div class="panel-heading"><div><p class="panel-index">LIVE LOG</p><h3>日志输出台</h3></div><button class="copy-button" id="clearOneBotLogs" type="button"><i data-lucide="trash-2"></i><span>清空日志</span></button></div>
+            <div class="onebot-log-list" id="onebotLogList"><div class="onebot-log-empty">监听启动后，这里会显示收到的消息、过滤结果、打印状态和回复状态。</div></div>
           </section>
-          <div class="notice message-notice"><div class="notice-icon"><i data-lucide="shield-check"></i></div><div><strong>消息过滤规则</strong><p>只打印 Telegram 私聊文字、已开启的图片和 WebP/WebM sticker。普通用户的 /start 等指令、群聊、频道、TGS、文件、视频、语音和其他动画会被自动跳过；已配置的管理员可在私聊使用管理指令；WebM 会按上方选择抽取一帧；每收到一条消息都会重新等待 500ms，连续 500ms 没有新消息后再合并打印。</p></div></div>
+          <div class="notice message-notice"><div class="notice-icon"><i data-lucide="shield-check"></i></div><div><strong>消息过滤规则</strong><p>只打印 QQ 私聊文字和已开启的图片，按原消息段顺序合并。群聊、机器人自发消息、心跳、文件、视频与语音不会打印；管理员可在私聊使用管理指令。连续 500ms 没有新消息后合并打印。</p></div></div>
         </section>
 
         <section class="page-view hidden-view" id="settingsView" aria-hidden="true">
@@ -235,7 +230,7 @@
             <div>
               <p class="section-kicker">APPLICATION SETTINGS</p>
               <h2>选择图片去向，<em>统一管理图床。</em></h2>
-              <p class="intro-copy">本地图片和 Telegram sticker、图片都会使用这里选择的图床上传。</p>
+              <p class="intro-copy">本地图片和 QQ 图片都会使用这里选择的图床上传。</p>
             </div>
             <div class="status-chip"><span class="status-pulse"></span><span id="imageHostStatus">路过图床</span></div>
           </section>
@@ -253,7 +248,7 @@
                     <div class="field-group"><label for="cfBedAuthCode">上传认证码</label><input id="cfBedAuthCode" type="password" placeholder="未使用可留空" autocomplete="off" /></div>
                   </div>
                   <div class="field-group compact-field"><label for="cfBedUploadChannel">上传渠道</label><select id="cfBedUploadChannel"><option value="">使用站点默认渠道</option><option value="telegram">Telegram</option><option value="cfr2">Cloudflare R2</option><option value="s3">S3</option><option value="discord">Discord</option><option value="huggingface">HuggingFace</option><option value="webdav">WebDAV</option></select></div>
-                  <div class="field-group compact-field"><label for="cfBedCacheExpireDays">缓存过期天数</label><input id="cfBedCacheExpireDays" type="number" min="0" max="36500" step="1" value="7" inputmode="numeric" /><p class="field-help">仅影响 Telegram sticker 和图片的重复上传缓存；填写 0 表示永不过期，默认 7 天。设置为 0 时不会产生过期图片。</p></div>
+                  <div class="field-group compact-field"><label for="cfBedCacheExpireDays">缓存过期天数</label><input id="cfBedCacheExpireDays" type="number" min="0" max="36500" step="1" value="7" inputmode="numeric" /><p class="field-help">仅影响 QQ 图片的重复上传缓存；填写 0 表示永不过期，默认 7 天。设置为 0 时不会产生过期图片。</p></div>
                   <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="cfBedDeleteExpiredCache"><input id="cfBedDeleteExpiredCache" type="checkbox" /><span class="switch-ui"></span><span>自动删除过期远程图片</span></label><span class="proxy-state">每天本地 0 点检查，启动时当天未检查则补做</span></div>
                 </div>
                 <button class="button primary settings-save" id="saveImageHost" type="submit"><i data-lucide="save"></i><span>保存图床设置</span></button>
@@ -270,7 +265,7 @@
               <a class="settings-doc-link" href="https://cfbed.sanyue.de/api/upload.html" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>查看 CloudFlare ImgBed 上传 API</span></a>
             </aside>
           </div>
-          <div class="notice settings-notice" id="settingsNotice" role="status" aria-live="polite"><div class="notice-icon"><i data-lucide="info"></i></div><div><strong>当前使用路过图床</strong><p>处理后的图片会上传到 Imgchr，并将返回的图片直链写入打印 JSON；相同 Telegram 媒体缓存 7 天。</p></div></div>
+          <div class="notice settings-notice" id="settingsNotice" role="status" aria-live="polite"><div class="notice-icon"><i data-lucide="info"></i></div><div><strong>当前使用路过图床</strong><p>处理后的图片会上传到 Imgchr，并将返回的图片直链写入打印 JSON；相同 OneBot 媒体缓存 7 天。</p></div></div>
         </section>
       </main>
 

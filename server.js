@@ -1,46 +1,46 @@
 const http = require('http');
 const https = require('https');
-const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const { spawn } = require('child_process');
+const { OneBotClient, normalizeOneBotUrl } = require('./onebot-client');
+let onebotClient = null;
 const { printableText, unsupportedCharacters } = require('./printable-text');
-const { telegramPrintNodes, telegramContentNodes, telegramQrAllowed } = require('./telegram-layout');
+const { onebotPrintNodes, onebotContentNodes, onebotQrAllowed } = require('./onebot-layout');
 const { isSidExpired } = require('./print-response');
 const {
   MAX_PREVIEW_LENGTH,
   MAX_MESSAGES,
   MAX_AUDIT_LOGS,
   normalizeAdminUserIds,
-  parseTelegramCommand,
-  parseTelegramUserId,
+  parseOneBotCommand,
+  parseOneBotUserId,
   parseDuration,
   truncateText,
-  paginateTelegramText,
+  paginateOneBotText,
   emptyAdminStore,
   normalizeAdminStore,
-} = require('./telegram-admin');
+} = require('./onebot-admin');
 
-const PORT = Number(process.env.PORT) || 4173;
+const PORT = Number(process.env.PORT) || 4180;
 const HOST = process.env.HOST || '127.0.0.1';
 const ROOT = __dirname;
 const TARGET_HOST = 'payapp.wechatpay.cn';
-const DEFAULT_TELEGRAM_API = 'https://api.telegram.org';
+const DEFAULT_ONEBOT_API = 'ws://127.0.0.1:3001';
 const DEFAULT_IMAGE_HOST = 'imgchr';
 const FFMPEG_COMMAND = process.env.WECHAT_PRINTER_FFMPEG || 'ffmpeg';
-const FFPROBE_COMMAND = process.env.WECHAT_PRINTER_FFPROBE || 'ffprobe';
-const STICKER_SIZE = 280;
+const MEDIA_SIZE = 280;
 const DEFAULT_CACHE_EXPIRE_DAYS = 7;
 const MAX_CACHE_EXPIRE_DAYS = 36500;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const STICKER_CACHE_VERSION = 2;
-const STICKER_CACHE_FILE = path.join(ROOT, '.sticker-cache.json');
+const MEDIA_CACHE_VERSION = 2;
+const MEDIA_CACHE_FILE = path.join(ROOT, '.onebot-media-cache.json');
 const CACHE_META_KEY = '__meta';
 const CACHE_PENDING_PREFIX = '__pending-delete:';
 const CONFIG_FILE = path.join(ROOT, 'config.json');
-const TELEGRAM_ADMIN_FILE = path.join(ROOT, '.telegram-admin.json');
-const ENV_ADMIN_USER_IDS = normalizeAdminUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || '');
+const ONEBOT_ADMIN_FILE = path.join(ROOT, '.onebot-admin.json');
+const ENV_ADMIN_USER_IDS = normalizeAdminUserIds(process.env.ONEBOT_ADMIN_USER_IDS || '');
 
 function log(level, message, detail = '') {
   const suffix = detail ? ` | ${String(detail).replace(/\s+/g, ' ').trim()}` : '';
@@ -53,12 +53,12 @@ function log(level, message, detail = '') {
 const DEFAULT_APP_CONFIG = {
   storageMode: 'browser',
   device: { sn: '', sid: '', accountType: 2 },
-  telegram: {
-    apiBase: DEFAULT_TELEGRAM_API, token: '',
-    proxyEnabled: false, proxyUrl: '', maxPerMinute: 2, maxCharsPerTask: 0,
+  onebot: {
+    apiBase: DEFAULT_ONEBOT_API, token: '',
+    maxPerMinute: 2, maxCharsPerTask: 0,
     rateLimitStrikeWindowMinutes: 1, rateLimitPenaltyMinutes: [2, 10, 1440], rateLimitBlacklistOnThird: false,
-    blacklist: [], stickerEnabled: true,
-    webmStickerEnabled: true, webmStickerFrame: 'penultimate', photoEnabled: true,
+    blacklist: [],
+    photoEnabled: true,
     reply_printing: '正在打印，请稍候。', reply_printed: '已打印。',
     reply_print_failed: '打印失败，请稍后重试。', reply_unsupported: '该消息类型不支持打印，请发送文字。',
     reply_rate_limited: '操作太频繁，请稍后再试。',
@@ -77,7 +77,7 @@ function normalizeAccountType(value, fallback = 2) {
 
 function mergeConfig(raw = {}) {
   const source = raw && typeof raw === 'object' ? raw : {};
-  const telegram = source.telegram && typeof source.telegram === 'object' ? source.telegram : {};
+  const onebot = source.onebot && typeof source.onebot === 'object' ? source.onebot : {};
   const device = source.device && typeof source.device === 'object' ? source.device : {};
   const savedDevices = Array.isArray(source.savedDevices) ? source.savedDevices.filter((item) => item?.sn && item?.sid).map((item) => ({
     sn: String(item.sn),
@@ -85,30 +85,27 @@ function mergeConfig(raw = {}) {
     account_type: normalizeAccountType(item.account_type ?? item.accountType),
   })) : [];
   const sharedDevice = device.sn && device.sid ? device : savedDevices[0] || {};
-  const { device_sn: _device_sn, deviceSn: _deviceSn, sid: _sid, accountType: _accountType, account_type: _account_type, ...telegramSettings } = telegram;
+  const { device_sn: _device_sn, deviceSn: _deviceSn, sid: _sid, accountType: _accountType, account_type: _account_type, ...onebotSettings } = onebot;
   return {
     storageMode: source.storageMode === 'local' ? 'local' : 'browser',
     device: { sn: String(sharedDevice.sn || ''), sid: String(sharedDevice.sid || ''), accountType: normalizeAccountType(sharedDevice.account_type ?? sharedDevice.accountType ?? device.account_type ?? device.accountType ?? savedDevices[0]?.account_type) },
-    telegram: {
-      ...DEFAULT_APP_CONFIG.telegram,
-      ...telegramSettings,
-      apiBase: String(telegram.apiBase || DEFAULT_TELEGRAM_API),
-      token: String(telegram.token || ''), proxyEnabled: Boolean(telegram.proxyEnabled), proxyUrl: String(telegram.proxyUrl || ''),
-      maxPerMinute: Number.isFinite(Number(telegram.maxPerMinute)) ? Math.max(0, Math.min(100, Math.floor(Number(telegram.maxPerMinute)))) : 2,
-      maxCharsPerTask: Number.isFinite(Number(telegram.maxCharsPerTask)) ? Math.max(0, Math.min(4294967295, Math.floor(Number(telegram.maxCharsPerTask)))) : 0,
-      rateLimitStrikeWindowMinutes: Number.isFinite(Number(telegram.rateLimitStrikeWindowMinutes)) ? Math.max(1, Math.min(1440, Math.floor(Number(telegram.rateLimitStrikeWindowMinutes)))) : 1,
-      rateLimitPenaltyMinutes: Array.isArray(telegram.rateLimitPenaltyMinutes) ? [0, 1, 2].map((index) => Number.isFinite(Number(telegram.rateLimitPenaltyMinutes[index])) ? Math.max(0, Math.min(525600, Math.floor(Number(telegram.rateLimitPenaltyMinutes[index])))) : [2, 10, 1440][index]) : [2, 10, 1440],
-      rateLimitBlacklistOnThird: telegram.rateLimitBlacklistOnThird === true,
-      adminUserIds: normalizeAdminUserIds(telegram.adminUserIds),
-      blacklist: Array.isArray(telegram.blacklist) ? telegram.blacklist.filter((item) => item && item.userId).map((item) => ({
+    onebot: {
+      ...DEFAULT_APP_CONFIG.onebot,
+      ...onebotSettings,
+      apiBase: String(onebot.apiBase || DEFAULT_ONEBOT_API),
+      token: String(onebot.token || ''),
+      maxPerMinute: Number.isFinite(Number(onebot.maxPerMinute)) ? Math.max(0, Math.min(100, Math.floor(Number(onebot.maxPerMinute)))) : 2,
+      maxCharsPerTask: Number.isFinite(Number(onebot.maxCharsPerTask)) ? Math.max(0, Math.min(4294967295, Math.floor(Number(onebot.maxCharsPerTask)))) : 0,
+      rateLimitStrikeWindowMinutes: Number.isFinite(Number(onebot.rateLimitStrikeWindowMinutes)) ? Math.max(1, Math.min(1440, Math.floor(Number(onebot.rateLimitStrikeWindowMinutes)))) : 1,
+      rateLimitPenaltyMinutes: Array.isArray(onebot.rateLimitPenaltyMinutes) ? [0, 1, 2].map((index) => Number.isFinite(Number(onebot.rateLimitPenaltyMinutes[index])) ? Math.max(0, Math.min(525600, Math.floor(Number(onebot.rateLimitPenaltyMinutes[index])))) : [2, 10, 1440][index]) : [2, 10, 1440],
+      rateLimitBlacklistOnThird: onebot.rateLimitBlacklistOnThird === true,
+      adminUserIds: normalizeAdminUserIds(onebot.adminUserIds),
+      blacklist: Array.isArray(onebot.blacklist) ? onebot.blacklist.filter((item) => item && item.userId).map((item) => ({
         userId: String(item.userId), name: String(item.name || '未知用户'), username: String(item.username || ''),
         blockedUntil: item.blockedUntil === null ? null : Number(item.blockedUntil) || null,
         reason: String(item.reason || '多次触发频率限制'), strikes: Number(item.strikes) || 0, createdAt: Number(item.createdAt) || Date.now(),
       })) : [],
-      stickerEnabled: telegram.stickerEnabled !== false,
-      webmStickerEnabled: telegram.webmStickerEnabled !== false,
-      webmStickerFrame: ['first', 'second', 'penultimate', 'last'].includes(telegram.webmStickerFrame) ? telegram.webmStickerFrame : 'penultimate',
-      photoEnabled: telegram.photoEnabled !== false,
+      photoEnabled: onebot.photoEnabled !== false,
     },
     imageHost: imageHostConfig(source.imageHost || {}),
   };
@@ -133,65 +130,65 @@ function clearAppConfig() {
 
 let appConfig = loadAppConfig();
 
-function loadTelegramAdminStore() {
+function loadOneBotAdminStore() {
   try {
-    const store = normalizeAdminStore(JSON.parse(fs.readFileSync(TELEGRAM_ADMIN_FILE, 'utf8')), [...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
-    if (!Object.keys(store.blacklist).length && Array.isArray(appConfig.telegram.blacklist)) {
-      return normalizeAdminStore({ ...store, blacklist: appConfig.telegram.blacklist }, [...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+    const store = normalizeAdminStore(JSON.parse(fs.readFileSync(ONEBOT_ADMIN_FILE, 'utf8')), [...appConfig.onebot.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+    if (!Object.keys(store.blacklist).length && Array.isArray(appConfig.onebot.blacklist)) {
+      return normalizeAdminStore({ ...store, blacklist: appConfig.onebot.blacklist }, [...appConfig.onebot.adminUserIds, ...ENV_ADMIN_USER_IDS]);
     }
     return store;
   } catch {
-    return normalizeAdminStore({ blacklist: appConfig.telegram.blacklist }, [...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+    return normalizeAdminStore({ blacklist: appConfig.onebot.blacklist }, [...appConfig.onebot.adminUserIds, ...ENV_ADMIN_USER_IDS]);
   }
 }
 
-let telegramAdminStore = loadTelegramAdminStore();
+let onebotAdminStore = loadOneBotAdminStore();
 
-function saveTelegramAdminStore() {
+function saveOneBotAdminStore() {
   try {
-    telegramAdminStore = normalizeAdminStore({
-      ...telegramAdminStore,
-      adminUserIds: [...telegramState.adminUserIds],
-      users: Object.fromEntries(telegramState.users),
-      userOverrides: Object.fromEntries(telegramState.userOverrides),
-      blacklist: Object.fromEntries(telegramState.blacklist),
-      messages: telegramState.messages,
-      auditLogs: telegramState.auditLogs,
-    }, [...telegramState.adminUserIds]);
-    const temporaryFile = `${TELEGRAM_ADMIN_FILE}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(temporaryFile, `${JSON.stringify(telegramAdminStore, null, 2)}\n`, 'utf8');
-    fs.renameSync(temporaryFile, TELEGRAM_ADMIN_FILE);
+    onebotAdminStore = normalizeAdminStore({
+      ...onebotAdminStore,
+      adminUserIds: [...onebotState.adminUserIds],
+      users: Object.fromEntries(onebotState.users),
+      userOverrides: Object.fromEntries(onebotState.userOverrides),
+      blacklist: Object.fromEntries(onebotState.blacklist),
+      messages: onebotState.messages,
+      auditLogs: onebotState.auditLogs,
+    }, [...onebotState.adminUserIds]);
+    const temporaryFile = `${ONEBOT_ADMIN_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temporaryFile, `${JSON.stringify(onebotAdminStore, null, 2)}\n`, 'utf8');
+    fs.renameSync(temporaryFile, ONEBOT_ADMIN_FILE);
     return true;
   } catch (error) {
-    log('ERROR', 'Telegram 管理数据保存失败', error.message);
+    log('ERROR', 'OneBot 管理数据保存失败', error.message);
     return false;
   }
 }
 
-function loadStickerCache() {
+function loadMediaCache() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(STICKER_CACHE_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(MEDIA_CACHE_FILE, 'utf8'));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 
-const stickerCache = loadStickerCache();
+const mediaCache = loadMediaCache();
 
-function saveStickerCache() {
+function saveMediaCache() {
   try {
-    const temporaryFile = `${STICKER_CACHE_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(temporaryFile, JSON.stringify(stickerCache, null, 2), 'utf8');
-    fs.renameSync(temporaryFile, STICKER_CACHE_FILE);
+    const temporaryFile = `${MEDIA_CACHE_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryFile, JSON.stringify(mediaCache, null, 2), 'utf8');
+    fs.renameSync(temporaryFile, MEDIA_CACHE_FILE);
   } catch {
     // Cache persistence is optional; a failed write must not block printing.
   }
 }
 
-function mediaCacheKey(media, variant = 'default', kind = 'sticker') {
+function mediaCacheKey(media, variant = 'default', kind = 'photo') {
   const id = media?.file_unique_id || media?.file_id;
-  return id ? (kind === 'sticker' ? `${String(id)}:${variant}` : `${kind}:${String(id)}:${variant}`) : '';
+  return id ? `${kind}:${String(id)}:${variant}` : '';
 }
 
 function imageHostCacheScope(config) {
@@ -205,8 +202,8 @@ function cacheEntryExpired(entry, settings, now = Date.now()) {
 
 function getCachedMediaEntry(key, config) {
   if (!key) return null;
-  const entry = stickerCache[key];
-  if (!entry?.directUrl || entry.processingVersion !== STICKER_CACHE_VERSION || !Number.isFinite(entry.createdAt)) return null;
+  const entry = mediaCache[key];
+  if (!entry?.directUrl || entry.processingVersion !== MEDIA_CACHE_VERSION || !Number.isFinite(entry.createdAt)) return null;
   const settings = imageHostConfig(config);
   if (entry.cacheScope !== imageHostCacheScope(settings)) return null;
   return { key, entry, settings };
@@ -242,17 +239,17 @@ function queueExpiredCacheEntry(candidate) {
   let changed = false;
   if (settings.provider === 'cfbed' && settings.deleteExpiredCache) {
     const remotePath = cfBedEntryRemotePath(entry);
-    const alreadyQueued = remotePath && Object.values(stickerCache).some((value) => (
+    const alreadyQueued = remotePath && Object.values(mediaCache).some((value) => (
       value?.pendingDeletion === true
       && value.cacheScope === imageHostCacheScope(settings)
       && value.remotePath === remotePath
     ));
     if (remotePath && !alreadyQueued) {
-      stickerCache[`${CACHE_PENDING_PREFIX}${Date.now()}:${Math.random().toString(36).slice(2)}`] = {
+      mediaCache[`${CACHE_PENDING_PREFIX}${Date.now()}:${Math.random().toString(36).slice(2)}`] = {
         directUrl: entry.directUrl,
         pageUrl: entry.pageUrl || '',
         createdAt: entry.createdAt,
-        processingVersion: STICKER_CACHE_VERSION,
+        processingVersion: MEDIA_CACHE_VERSION,
         cacheScope: imageHostCacheScope(settings),
         remotePath,
         pendingDeletion: true,
@@ -260,11 +257,11 @@ function queueExpiredCacheEntry(candidate) {
       changed = true;
     }
   }
-  if (stickerCache[key] === entry) {
-    delete stickerCache[key];
+  if (mediaCache[key] === entry) {
+    delete mediaCache[key];
     changed = true;
   }
-  if (changed) saveStickerCache();
+  if (changed) saveMediaCache();
 }
 
 function imageHostCleanupStatus() {
@@ -277,14 +274,14 @@ function imageHostCleanupStatus() {
 }
 
 function disableExpiredCacheDeletion(message) {
-  const settings = imageHostConfig(telegramState.imageHost);
-  telegramState.imageHost = { ...settings, deleteExpiredCache: false };
+  const settings = imageHostConfig(onebotState.imageHost);
+  onebotState.imageHost = { ...settings, deleteExpiredCache: false };
   imageHostCleanupState.permissionDisabled = true;
   imageHostCleanupState.lastError = message;
   imageHostCleanupState.notice = `CloudFlare ImgBed API Token 未配置或没有 delete 权限，已自动关闭“自动删除过期图片”。请配置同时具有 upload 和 delete 权限的 Token 后重新开启。`;
-  addTelegramLog('system', '已自动关闭过期图片删除', imageHostCleanupState.notice);
+  addOneBotLog('system', '已自动关闭过期图片删除', imageHostCleanupState.notice);
   if (appConfig.storageMode === 'local' && appConfig.imageHost?.provider === 'cfbed') {
-    try { appConfig = saveAppConfig({ ...appConfig, imageHost: telegramState.imageHost }); } catch (error) { imageHostCleanupState.lastError = `${message}；自动保存关闭状态失败：${error.message}`; }
+    try { appConfig = saveAppConfig({ ...appConfig, imageHost: onebotState.imageHost }); } catch (error) { imageHostCleanupState.lastError = `${message}；自动保存关闭状态失败：${error.message}`; }
   }
 }
 
@@ -320,7 +317,7 @@ async function deleteCfBedFiles(fileIds, config) {
 function expiredCacheEntries(settings, keys = null) {
   if (settings.provider !== 'cfbed') return [];
   const selectedKeys = keys ? new Set(keys.map((candidate) => candidate.key)) : null;
-  return Object.entries(stickerCache)
+  return Object.entries(mediaCache)
     .filter(([key, entry]) => (
       (!selectedKeys || selectedKeys.has(key))
       && entry?.cacheScope === imageHostCacheScope(settings)
@@ -336,8 +333,8 @@ async function removeExpiredCacheEntries(config, candidates = null) {
   if (!entries.length) return { blocked: false, deleted: 0 };
   if (!settings.deleteExpiredCache) {
     let deleted = 0;
-    entries.forEach(({ key, entry }) => { if (stickerCache[key] === entry) { delete stickerCache[key]; deleted += 1; } });
-    if (deleted) saveStickerCache();
+    entries.forEach(({ key, entry }) => { if (mediaCache[key] === entry) { delete mediaCache[key]; deleted += 1; } });
+    if (deleted) saveMediaCache();
     return { blocked: false, deleted };
   }
   const remoteEntries = entries.map((candidate) => ({ ...candidate, remotePath: cfBedEntryRemotePath(candidate.entry) })).filter((candidate) => candidate.remotePath);
@@ -359,13 +356,13 @@ async function removeExpiredCacheEntries(config, candidates = null) {
     return !remotePath || deletions.has(remotePath);
   });
   let deleted = 0;
-  removable.forEach(({ key, entry }) => { if (stickerCache[key] === entry) { delete stickerCache[key]; deleted += 1; } });
-  if (deleted) saveStickerCache();
+  removable.forEach(({ key, entry }) => { if (mediaCache[key] === entry) { delete mediaCache[key]; deleted += 1; } });
+  if (deleted) saveMediaCache();
   if (failure) return { blocked: true, error: failure };
   return { blocked: false, deleted };
 }
 
-async function runExpiredCacheCleanup(config = telegramState.imageHost) {
+async function runExpiredCacheCleanup(config = onebotState.imageHost) {
   imageHostCleanupState.lastCheckAt = Date.now();
   imageHostCleanupState.lastError = '';
   const settings = imageHostConfig(config);
@@ -389,24 +386,24 @@ function cleanupScope(settings) {
 }
 
 function cleanupAlreadyDoneToday(settings) {
-  const meta = stickerCache[CACHE_META_KEY];
+  const meta = mediaCache[CACHE_META_KEY];
   const done = meta?.lastCleanupDate === localDateKey() && meta.lastCleanupScope === cleanupScope(settings);
   if (done && Number.isFinite(meta.lastCleanupAt)) imageHostCleanupState.lastCheckAt = meta.lastCleanupAt;
   return done;
 }
 
 function markCleanupDone(settings) {
-  stickerCache[CACHE_META_KEY] = {
+  mediaCache[CACHE_META_KEY] = {
     lastCleanupDate: localDateKey(),
     lastCleanupScope: cleanupScope(settings),
     lastCleanupAt: Date.now(),
   };
-  saveStickerCache();
+  saveMediaCache();
 }
 
 let imageHostCleanupRun = null;
 
-async function runScheduledCacheCleanup(config = telegramState.imageHost) {
+async function runScheduledCacheCleanup(config = onebotState.imageHost) {
   const settings = imageHostConfig(config);
   if (settings.provider !== 'cfbed' || !settings.deleteExpiredCache) return { blocked: false, deleted: 0, skipped: true };
   const hasPendingDeletion = expiredCacheEntries(settings).some(({ entry }) => entry.pendingDeletion === true);
@@ -439,7 +436,7 @@ function applyImageHostSettings(config) {
   const preservePermissionNotice = imageHostCleanupState.permissionDisabled
     && settings.provider === 'cfbed'
     && settings.deleteExpiredCache === false;
-  telegramState.imageHost = settings;
+  onebotState.imageHost = settings;
   if (!preservePermissionNotice) resetImageHostCleanupStatus();
   return settings;
 }
@@ -450,41 +447,37 @@ function scheduleImageHostCleanup() {
   const next = new Date(now);
   next.setHours(24, 0, 0, 0);
   imageHostCleanupTimer = setTimeout(async () => {
-    try { await runScheduledCacheCleanup(telegramState.imageHost); } catch (error) { imageHostCleanupState.lastError = error.message; }
+    try { await runScheduledCacheCleanup(onebotState.imageHost); } catch (error) { imageHostCleanupState.lastError = error.message; }
     scheduleImageHostCleanup();
   }, Math.max(1000, next.getTime() - now.getTime()));
 }
 
 function cacheMedia(key, hosted, config) {
   if (!key || !hosted?.directUrl) return;
-  stickerCache[key] = {
+  mediaCache[key] = {
     directUrl: hosted.directUrl,
     pageUrl: hosted.pageUrl || '',
     createdAt: Date.now(),
-    processingVersion: STICKER_CACHE_VERSION,
+    processingVersion: MEDIA_CACHE_VERSION,
     cacheScope: imageHostCacheScope(config),
     remotePath: hosted.remotePath || '',
   };
-  saveStickerCache();
+  saveMediaCache();
 }
 
-const telegramState = {
+const onebotState = {
   running: false,
   token: '',
   offset: 0,
   sid: '',
   deviceSn: '',
   accountType: 2,
-  apiBase: DEFAULT_TELEGRAM_API,
-  proxyUrl: '',
+  apiBase: DEFAULT_ONEBOT_API,
   maxPerMinute: 2,
   maxCharsPerTask: 0,
   rateLimitStrikeWindowMinutes: 1,
   rateLimitPenaltyMinutes: [2, 10, 1440],
   rateLimitBlacklistOnThird: false,
-  stickerEnabled: true,
-  webmStickerEnabled: true,
-  webmStickerFrame: 'penultimate',
   photoEnabled: true,
   replyPrinting: '正在打印，请稍候。',
   replyPrinted: '已打印。',
@@ -492,15 +485,15 @@ const telegramState = {
   replyUnsupported: '该消息类型不支持打印，请发送文字。',
   replyRateLimited: '操作太频繁，请稍后再试。',
   logs: [],
-  adminUserIds: new Set(telegramAdminStore.adminUserIds),
-  users: new Map(Object.entries(telegramAdminStore.users)),
-  userOverrides: new Map(Object.entries(telegramAdminStore.userOverrides)),
-  messages: telegramAdminStore.messages.slice(-MAX_MESSAGES),
-  messageById: new Map(telegramAdminStore.messages.map((item) => [item.id, item])),
-  auditLogs: telegramAdminStore.auditLogs.slice(-MAX_AUDIT_LOGS),
+  adminUserIds: new Set(onebotAdminStore.adminUserIds),
+  users: new Map(Object.entries(onebotAdminStore.users)),
+  userOverrides: new Map(Object.entries(onebotAdminStore.userOverrides)),
+  messages: onebotAdminStore.messages.slice(-MAX_MESSAGES),
+  messageById: new Map(onebotAdminStore.messages.map((item) => [item.id, item])),
+  auditLogs: onebotAdminStore.auditLogs.slice(-MAX_AUDIT_LOGS),
   userTasks: new Map(),
   rateLimitStrikes: new Map(),
-  blacklist: new Map(Object.entries(telegramAdminStore.blacklist)),
+  blacklist: new Map(Object.entries(onebotAdminStore.blacklist)),
   printQueue: [],
   printFlushTimer: null,
   lastMessage: '',
@@ -516,9 +509,9 @@ const imageHostCleanupState = {
   notice: '',
 };
 let imageHostCleanupTimer = null;
-const MAX_TELEGRAM_LOGS = 200;
-const MAX_TELEGRAM_MESSAGES = MAX_MESSAGES;
-const MAX_TELEGRAM_AUDIT_LOGS = MAX_AUDIT_LOGS;
+const MAX_ONEBOT_LOGS = 200;
+const MAX_ONEBOT_MESSAGES = MAX_MESSAGES;
+const MAX_ONEBOT_AUDIT_LOGS = MAX_AUDIT_LOGS;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -703,15 +696,15 @@ async function setImageHostSettings(req, res) {
   try {
     const raw = await readRequestBody(req, 64 * 1024);
     applyImageHostSettings(JSON.parse(raw.toString('utf8') || '{}'));
-    await runScheduledCacheCleanup(telegramState.imageHost);
-    log('INFO', '图床设置已更新', telegramState.imageHost.provider);
+    await runScheduledCacheCleanup(onebotState.imageHost);
+    log('INFO', '图床设置已更新', onebotState.imageHost.provider);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
-      provider: telegramState.imageHost.provider,
-      baseUrl: telegramState.imageHost.baseUrl || '',
-      uploadChannel: telegramState.imageHost.uploadChannel || '',
-      cacheExpireDays: telegramState.imageHost.cacheExpireDays,
-      deleteExpiredCache: telegramState.imageHost.deleteExpiredCache,
+      provider: onebotState.imageHost.provider,
+      baseUrl: onebotState.imageHost.baseUrl || '',
+      uploadChannel: onebotState.imageHost.uploadChannel || '',
+      cacheExpireDays: onebotState.imageHost.cacheExpireDays,
+      deleteExpiredCache: onebotState.imageHost.deleteExpiredCache,
       cleanup: imageHostCleanupStatus(),
     }));
   } catch (error) {
@@ -731,7 +724,7 @@ async function updateAppConfig(req, res) {
     const raw = await readRequestBody(req, 256 * 1024);
     appConfig = saveAppConfig(JSON.parse(raw.toString('utf8') || '{}'));
     applyImageHostSettings(appConfig.imageHost);
-    await runScheduledCacheCleanup(telegramState.imageHost);
+    await runScheduledCacheCleanup(onebotState.imageHost);
     log('INFO', '本地配置已保存');
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ saved: true, config: appConfig }));
@@ -836,87 +829,21 @@ function proxyPrint(req, res, requestUrl) {
   });
 }
 
-function normalizeTelegramApiBase(value) {
-  const target = new URL(String(value || DEFAULT_TELEGRAM_API).trim());
-  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Telegram API 地址只支持 HTTP 或 HTTPS');
-  if (target.username || target.password) throw new Error('Telegram API 地址不能包含用户名或密码');
-  if (target.search || target.hash) throw new Error('Telegram API 地址不能包含查询参数或锚点');
-  target.pathname = target.pathname.replace(/\/+$/, '');
-  return target.toString().replace(/\/$/, '');
+function normalizeOneBotApiBase(value) {
+  return normalizeOneBotUrl(value || DEFAULT_ONEBOT_API);
 }
 
-function normalizeTelegramProxy(value) {
-  if (!value) return '';
-  const target = new URL(String(value).trim());
-  if (target.protocol !== 'http:') throw new Error('HTTP 代理地址必须使用 http://');
-  if (!target.hostname) throw new Error('HTTP 代理地址缺少主机名');
-  if (target.pathname !== '/' || target.search || target.hash) throw new Error('HTTP 代理地址只能包含协议、主机、端口和可选账号密码');
-  return target.toString().replace(/\/$/, '');
+async function onebotRequest(apiBase, token, action, params = {}, timeoutMs = 15000) {
+  if (!onebotClient || onebotClient.url !== normalizeOneBotUrl(apiBase) || onebotClient.token !== String(token || '').trim()) {
+    if (onebotClient) onebotClient.close();
+    onebotClient = new OneBotClient(apiBase, token);
+  }
+  return onebotClient.call(action, params, timeoutMs);
 }
 
-function proxyAuthorization(proxy) {
-  return proxy.username || proxy.password ? `Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString('base64')}` : undefined;
-}
-
-function collectTelegramResponse(request, resolve, reject) {
-  request.on('timeout', () => request.destroy(new Error('Telegram 请求超时')));
-  request.on('error', reject);
-  request.on('response', (response) => {
-    const chunks = [];
-    response.on('data', (chunk) => chunks.push(chunk));
-    response.on('end', () => {
-      try {
-        const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (!result.ok) reject(new Error(result.description || `Telegram API ${response.statusCode}`));
-        else resolve(result.result);
-      } catch (error) { reject(error); }
-    });
-  });
-}
-
-function telegramRequest(apiBase, token, method, params, timeoutMs = 50000, proxyUrl = '') {
-  return new Promise((resolve, reject) => {
-    const body = Buffer.from(JSON.stringify(params || {}));
-    const endpoint = new URL(`${apiBase}/bot${token}/${method}`);
-    const headers = { 'Content-Type': 'application/json', 'Content-Length': body.length };
-    if (!proxyUrl) {
-      const transport = endpoint.protocol === 'https:' ? https : http;
-      const request = transport.request(endpoint, { method: 'POST', headers, timeout: timeoutMs });
-      collectTelegramResponse(request, resolve, reject);
-      request.end(body);
-      return;
-    }
-
-    const proxy = new URL(proxyUrl);
-    const auth = proxyAuthorization(proxy);
-    if (endpoint.protocol === 'http:') {
-      const proxyHeaders = { ...headers, Host: endpoint.host };
-      if (auth) proxyHeaders['Proxy-Authorization'] = auth;
-      const request = http.request({ hostname: proxy.hostname, port: proxy.port || 80, method: 'POST', path: endpoint.href, headers: proxyHeaders, timeout: timeoutMs });
-      collectTelegramResponse(request, resolve, reject);
-      request.end(body);
-      return;
-    }
-
-    const connectHeaders = { Host: `${endpoint.hostname}:${endpoint.port || 443}` };
-    if (auth) connectHeaders['Proxy-Authorization'] = auth;
-    const connect = http.request({ hostname: proxy.hostname, port: proxy.port || 80, method: 'CONNECT', path: `${endpoint.hostname}:${endpoint.port || 443}`, headers: connectHeaders, timeout: timeoutMs });
-    connect.once('connect', (response, socket, head) => {
-      if (response.statusCode !== 200) {
-        socket.destroy();
-        reject(new Error(`HTTP 代理 CONNECT 失败：${response.statusCode || '无状态码'}`));
-        return;
-      }
-      const secureSocket = tls.connect({ socket, servername: endpoint.hostname });
-      if (head?.length) secureSocket.unshift(head);
-      const request = https.request({ hostname: endpoint.hostname, port: endpoint.port || 443, path: `${endpoint.pathname}${endpoint.search}`, method: 'POST', headers, createConnection: () => secureSocket, timeout: timeoutMs });
-      collectTelegramResponse(request, resolve, reject);
-      request.end(body);
-    });
-    connect.on('error', reject);
-    connect.on('timeout', () => connect.destroy(new Error('HTTP 代理请求超时')));
-    connect.end();
-  });
+function closeOneBotClient() {
+  if (onebotClient) onebotClient.close();
+  onebotClient = null;
 }
 
 function characterWidth(character) {
@@ -948,74 +875,33 @@ function splitTextIntoLines(text, capacity = 32) {
   return lines.length ? lines : [''];
 }
 
-function telegramFileUrl(filePath) {
-  return `${telegramState.apiBase}/file/bot${telegramState.token}/${filePath}`;
-}
-
-function downloadTelegramBuffer(target, proxyUrl = '') {
+function downloadOneBotBuffer(target, redirects = 0) {
   return new Promise((resolve, reject) => {
-    const requestUrl = new URL(target);
-    const finishResponse = (response) => {
+    let url;
+    try { url = new URL(target); } catch { reject(new Error('QQ 图片地址无效')); return; }
+    if (!['http:', 'https:'].includes(url.protocol)) { reject(new Error('QQ 图片仅支持 HTTP(S) 地址')); return; }
+    if (redirects > 5) { reject(new Error('QQ 图片重定向次数过多')); return; }
+    const transport = url.protocol === 'https:' ? https : http;
+    const request = transport.get(url, { timeout: 30000 }, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
-        downloadTelegramBuffer(new URL(response.headers.location, requestUrl).toString(), proxyUrl).then(resolve, reject);
+        downloadOneBotBuffer(new URL(response.headers.location, url).toString(), redirects + 1).then(resolve, reject);
         return;
       }
-      if (response.statusCode !== 200) {
-        response.resume();
-        reject(new Error(`Telegram 文件下载失败（HTTP ${response.statusCode || 0}）`));
-        return;
-      }
+      if (response.statusCode !== 200) { response.resume(); reject(new Error(`QQ 图片下载失败（HTTP ${response.statusCode || 0}）`)); return; }
       const chunks = [];
       let size = 0;
-      let failed = false;
       response.on('data', (chunk) => {
         size += chunk.length;
-        if (size > 20 * 1024 * 1024) {
-          failed = true;
-          response.destroy();
-          reject(new Error('Telegram 文件过大'));
-        }
-        else chunks.push(chunk);
+        if (size > 20 * 1024 * 1024) { response.destroy(new Error('QQ 图片超过 20 MB')); return; }
+        chunks.push(chunk);
       });
-      response.on('end', () => { if (!failed) resolve(Buffer.concat(chunks)); });
-    };
-
-    if (!proxyUrl) {
-      const transport = requestUrl.protocol === 'https:' ? https : http;
-      const request = transport.get(requestUrl, { timeout: 30_000 }, finishResponse);
-      request.on('timeout', () => request.destroy(new Error('Telegram 文件下载超时')));
-      request.on('error', reject);
-      return;
-    }
-
-    const proxy = new URL(proxyUrl);
-    const auth = proxyAuthorization(proxy);
-    if (requestUrl.protocol === 'http:') {
-      const headers = { Host: requestUrl.host, ...(auth ? { 'Proxy-Authorization': auth } : {}) };
-      const request = http.get({ hostname: proxy.hostname, port: proxy.port || 80, path: requestUrl.href, headers, timeout: 30_000 }, finishResponse);
-      request.on('timeout', () => request.destroy(new Error('Telegram 文件下载超时')));
-      request.on('error', reject);
-      return;
-    }
-
-    const connectHeaders = { Host: `${requestUrl.hostname}:${requestUrl.port || 443}`, ...(auth ? { 'Proxy-Authorization': auth } : {}) };
-    const connect = http.request({ hostname: proxy.hostname, port: proxy.port || 80, method: 'CONNECT', path: `${requestUrl.hostname}:${requestUrl.port || 443}`, headers: connectHeaders, timeout: 30_000 });
-    connect.once('connect', (response, socket, head) => {
-      if (response.statusCode !== 200) {
-        socket.destroy();
-        reject(new Error(`HTTP 代理 CONNECT 失败：${response.statusCode || '无状态码'}`));
-        return;
-      }
-      const secureSocket = tls.connect({ socket, servername: requestUrl.hostname });
-      if (head?.length) secureSocket.unshift(head);
-      const request = https.get({ hostname: requestUrl.hostname, port: requestUrl.port || 443, path: `${requestUrl.pathname}${requestUrl.search}`, createConnection: () => secureSocket, timeout: 30_000 }, finishResponse);
-      request.on('timeout', () => request.destroy(new Error('Telegram 文件下载超时')));
-      request.on('error', reject);
+      response.on('end', () => resolve(Buffer.concat(chunks)));
+      response.on('error', reject);
+      response.on('aborted', () => reject(new Error('QQ 图片下载被中断')));
     });
-    connect.on('timeout', () => connect.destroy(new Error('HTTP 代理请求超时')));
-    connect.on('error', reject);
-    connect.end();
+    request.on('timeout', () => request.destroy(new Error('QQ 图片下载超时')));
+    request.on('error', () => reject(new Error('QQ 图片下载失败，请检查图片地址或网络')));
   });
 }
 
@@ -1046,51 +932,7 @@ function runFfmpeg(args, input, errorLabel) {
   });
 }
 
-function probeVideoFrameCount(input) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(FFPROBE_COMMAND, [
-      '-v', 'error',
-      '-count_frames',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=nb_read_frames,nb_frames',
-      '-of', 'default=nokey=1:noprint_wrappers=1',
-      '-i', 'pipe:0',
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
-    const output = [];
-    const errors = [];
-    let settled = false;
-    const fail = (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-    child.stdout.on('data', (chunk) => output.push(chunk));
-    child.stderr.on('data', (chunk) => errors.push(chunk));
-    child.on('error', (error) => fail(new Error(`无法调用 FFprobe：${error.message}`)));
-    child.on('close', (code) => {
-      if (settled) return;
-      if (code !== 0) {
-        fail(new Error(`无法读取 WebM sticker 帧数：${Buffer.concat(errors).toString('utf8').trim() || `FFprobe ${code}`}`));
-        return;
-      }
-      const count = Buffer.concat(output).toString('utf8').split(/\s+/).map((value) => Number(value)).find((value) => Number.isInteger(value) && value > 0);
-      if (!count) {
-        fail(new Error('无法读取 WebM sticker 帧数'));
-        return;
-      }
-      settled = true;
-      resolve(count);
-    });
-    child.stdin.end(input);
-  });
-}
 
-function selectedStickerFrameIndex(frameCount, frameMode) {
-  if (frameMode === 'second') return Math.min(1, frameCount - 1);
-  if (frameMode === 'last') return frameCount - 1;
-  if (frameMode === 'penultimate') return Math.max(0, frameCount - 2);
-  return 0;
-}
 
 function applyFloydSteinberg(buffer, width, height) {
   const grayscale = new Float32Array(width * height);
@@ -1123,69 +965,43 @@ function applyFloydSteinberg(buffer, width, height) {
   return buffer;
 }
 
-async function renderTelegramImage(input, filterPrefix, errorLabel) {
-  const imageFilter = `${filterPrefix || ''}scale=${STICKER_SIZE}:${STICKER_SIZE}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${STICKER_SIZE}:${STICKER_SIZE}:(ow-iw)/2:oh-ih:color=white,setsar=1`;
+async function renderOneBotImage(input, filterPrefix, errorLabel) {
+  const imageFilter = `${filterPrefix || ''}scale=${MEDIA_SIZE}:${MEDIA_SIZE}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${MEDIA_SIZE}:${MEDIA_SIZE}:(ow-iw)/2:oh-ih:color=white,setsar=1`;
   const rgba = await runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', imageFilter, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], input, errorLabel);
-  const expectedLength = STICKER_SIZE * STICKER_SIZE * 4;
-  if (rgba.length < expectedLength) throw new Error('Telegram 图片处理结果不完整');
-  const binarized = applyFloydSteinberg(Buffer.from(rgba.subarray(0, expectedLength)), STICKER_SIZE, STICKER_SIZE);
-  return runFfmpeg(['-hide_banner', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${STICKER_SIZE}x${STICKER_SIZE}`, '-i', 'pipe:0', '-frames:v', '1', '-f', 'image2', '-vcodec', 'mjpeg', '-q:v', '2', 'pipe:1'], binarized, 'Telegram 图片 JPEG 编码失败');
+  const expectedLength = MEDIA_SIZE * MEDIA_SIZE * 4;
+  if (rgba.length < expectedLength) throw new Error('OneBot 图片处理结果不完整');
+  const binarized = applyFloydSteinberg(Buffer.from(rgba.subarray(0, expectedLength)), MEDIA_SIZE, MEDIA_SIZE);
+  return runFfmpeg(['-hide_banner', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${MEDIA_SIZE}x${MEDIA_SIZE}`, '-i', 'pipe:0', '-frames:v', '1', '-f', 'image2', '-vcodec', 'mjpeg', '-q:v', '2', 'pipe:1'], binarized, 'OneBot 图片 JPEG 编码失败');
 }
 
-async function processTelegramSticker(sticker, options = {}) {
-  const fileId = sticker?.file_id;
-  if (!fileId) throw new Error('sticker 缺少 file_id');
-  const file = await telegramRequest(telegramState.apiBase, telegramState.token, 'getFile', { file_id: fileId }, 15_000, telegramState.proxyUrl);
-  const filePath = String(file?.file_path || '');
-  const extension = filePath.toLowerCase().split('.').pop();
-  if (extension === 'webm') {
-    if (options.webmEnabled === false) {
-      const error = new Error('WebM sticker 打印已关闭');
-      error.code = 'UNSUPPORTED_STICKER';
-      throw error;
+async function processOneBotPhoto(photo) {
+  if (!photo?.file_id && !photo?.source_url) throw new Error('QQ 图片缺少文件标识或地址');
+  const cacheKey = mediaCacheKey(photo, 'onebot-photo', 'photo');
+  const cached = await getCachedMedia(cacheKey, onebotState.imageHost);
+  if (cached) return cached;
+  let input;
+  if (photo.source_url) {
+    try { input = await downloadOneBotBuffer(photo.source_url); } catch { /* Try the local OneBot image resolver. */ }
+  }
+  if (!input && photo.file_id) {
+    const file = await onebotRequest(onebotState.apiBase, onebotState.token, 'get_image', { file: photo.file_id });
+    if (file?.url && /^https?:\/\//i.test(file.url)) input = await downloadOneBotBuffer(file.url);
+    else if (file?.file && /^https?:\/\//i.test(file.file)) input = await downloadOneBotBuffer(file.file);
+    else if (file?.file) {
+      // Only read a path returned by our configured OneBot service, never a path supplied directly by a chat message.
+      const metadata = await fs.promises.stat(file.file);
+      if (!metadata.isFile() || metadata.size > 20 * 1024 * 1024) throw new Error('OneBot 返回的图片文件无效或超过 20 MB');
+      input = await fs.promises.readFile(file.file);
     }
   }
-  if (extension !== 'webp' && extension !== 'webm') {
-    const error = new Error(`不支持的 sticker 格式：${extension || 'unknown'}`);
-    error.code = 'UNSUPPORTED_STICKER';
-    throw error;
-  }
-  const cacheVariant = extension === 'webm' ? `webm:${options.webmFrame || 'penultimate'}` : 'webp';
-  const cacheKey = mediaCacheKey(sticker, cacheVariant);
-  const cached = await getCachedMedia(cacheKey, telegramState.imageHost);
-  if (cached) return cached;
-  const input = await downloadTelegramBuffer(telegramFileUrl(filePath), telegramState.proxyUrl);
-  let frameIndex = 0;
-  if (extension === 'webm') {
-    const frameCount = await probeVideoFrameCount(input);
-    frameIndex = selectedStickerFrameIndex(frameCount, options.webmFrame || 'penultimate');
-  }
-  const frameFilter = extension === 'webm' ? `select=eq(n\\,${frameIndex}),` : '';
-  const jpg = await renderTelegramImage(input, frameFilter, `${extension.toUpperCase()} sticker 解码失败`);
-  const dataUrl = `data:image/jpeg;base64,${jpg.toString('base64')}`;
-  const hosted = await uploadHostedImage(dataUrl, telegramState.imageHost);
-  cacheMedia(cacheKey, hosted, telegramState.imageHost);
+  if (!input) throw new Error('无法从 QQ / OneBot 获取图片');
+  const jpg = await renderOneBotImage(input, '', 'QQ 图片解码失败');
+  const hosted = await uploadHostedImage(`data:image/jpeg;base64,${jpg.toString('base64')}`, onebotState.imageHost);
+  cacheMedia(cacheKey, hosted, onebotState.imageHost);
   return { directUrl: hosted.directUrl, pageUrl: hosted.pageUrl };
 }
 
-async function processTelegramPhoto(photo) {
-  const fileId = photo?.file_id;
-  if (!fileId) throw new Error('Telegram 图片缺少 file_id');
-  const cacheKey = mediaCacheKey(photo, 'photo', 'photo');
-  const cached = await getCachedMedia(cacheKey, telegramState.imageHost);
-  if (cached) return cached;
-  const file = await telegramRequest(telegramState.apiBase, telegramState.token, 'getFile', { file_id: fileId }, 15_000, telegramState.proxyUrl);
-  const filePath = String(file?.file_path || '');
-  if (!filePath) throw new Error('Telegram 图片缺少文件路径');
-  const input = await downloadTelegramBuffer(telegramFileUrl(filePath), telegramState.proxyUrl);
-  const jpg = await renderTelegramImage(input, '', 'Telegram 图片解码失败');
-  const dataUrl = `data:image/jpeg;base64,${jpg.toString('base64')}`;
-  const hosted = await uploadHostedImage(dataUrl, telegramState.imageHost);
-  cacheMedia(cacheKey, hosted, telegramState.imageHost);
-  return { directUrl: hosted.directUrl, pageUrl: hosted.pageUrl };
-}
-
-function telegramSenderName(user) {
+function onebotSenderName(user) {
   const firstName = String(user?.first_name || '').trim();
   const lastName = String(user?.last_name || '').trim();
   const fullName = firstName && lastName
@@ -1199,29 +1015,28 @@ function normalizeReply(value, fallback) {
   return String(value).trim().slice(0, 500);
 }
 
-function addTelegramLog(type, message, detail = '') {
+function addOneBotLog(type, message, detail = '') {
   const entry = { time: new Date().toISOString(), type, message: truncateText(message, MAX_PREVIEW_LENGTH), detail: truncateText(detail, 500) };
-  telegramState.logs.push(entry);
-  if (telegramState.logs.length > MAX_TELEGRAM_LOGS) telegramState.logs.splice(0, telegramState.logs.length - MAX_TELEGRAM_LOGS);
+  onebotState.logs.push(entry);
+  if (onebotState.logs.length > MAX_ONEBOT_LOGS) onebotState.logs.splice(0, onebotState.logs.length - MAX_ONEBOT_LOGS);
   const level = ['failed', 'reply_failed'].includes(type) ? 'ERROR' : ['blocked', 'filtered', 'ignored', 'limited'].includes(type) ? 'WARN' : 'INFO';
-  log(level, `Telegram ${type}`, `${entry.message}${entry.detail ? ` | ${entry.detail}` : ''}`);
+  log(level, `OneBot ${type}`, `${entry.message}${entry.detail ? ` | ${entry.detail}` : ''}`);
 }
 
-function telegramMessageType(message) {
+function onebotMessageType(message) {
   if (message?.text) return 'text';
   if (message?.photo) return 'photo';
-  if (message?.sticker) return 'sticker';
   if (message?.document) return 'document';
   if (message?.video) return 'video';
   if (message?.voice) return 'voice';
   return 'other';
 }
 
-function upsertTelegramUser(user, message = null) {
-  const userId = parseTelegramUserId(user?.userId || user?.id);
+function upsertOneBotUser(user, message = null) {
+  const userId = parseOneBotUserId(user?.userId || user?.id);
   if (!userId) return null;
   const now = Date.now();
-  const previous = telegramState.users.get(userId);
+  const previous = onebotState.users.get(userId);
   const profile = {
     userId,
     name: truncateText(user?.name || previous?.name || '未知用户', 120),
@@ -1232,14 +1047,14 @@ function upsertTelegramUser(user, message = null) {
     printSuccessCount: previous?.printSuccessCount || 0,
     printFailedCount: previous?.printFailedCount || 0,
     limitedCount: previous?.limitedCount || 0,
-    lastMessageType: message ? telegramMessageType(message) : (previous?.lastMessageType || ''),
-    lastMessagePreview: message ? truncateText(message.text || message.caption || `[${telegramMessageType(message)}]`) : (previous?.lastMessagePreview || ''),
+    lastMessageType: message ? onebotMessageType(message) : (previous?.lastMessageType || ''),
+    lastMessagePreview: message ? truncateText(message.text || message.caption || `[${onebotMessageType(message)}]`) : (previous?.lastMessagePreview || ''),
   };
-  telegramState.users.set(userId, profile);
+  onebotState.users.set(userId, profile);
   return profile;
 }
 
-function recordTelegramMessage(message, updateId, userProfile) {
+function recordOneBotMessage(message, updateId, userProfile) {
   const userId = String(userProfile.userId);
   const entry = {
     id: `${updateId}:${message.message_id || Date.now()}`,
@@ -1248,41 +1063,41 @@ function recordTelegramMessage(message, updateId, userProfile) {
     userId,
     chatId: String(message.chat?.id || userId),
     receivedAt: Date.now(),
-    type: telegramMessageType(message),
-    preview: truncateText(message.text || message.caption || `[${telegramMessageType(message)}]`),
+    type: onebotMessageType(message),
+    preview: truncateText(message.text || message.caption || `[${onebotMessageType(message)}]`),
     status: 'received',
     detail: '',
     finishedAt: 0,
   };
-  telegramState.messages.push(entry);
-  telegramState.messageById = telegramState.messageById || new Map();
-  telegramState.messageById.set(entry.id, entry);
-  if (telegramState.messages.length > MAX_TELEGRAM_MESSAGES) {
-    const removed = telegramState.messages.splice(0, telegramState.messages.length - MAX_TELEGRAM_MESSAGES);
-    removed.forEach((item) => telegramState.messageById.delete(item.id));
+  onebotState.messages.push(entry);
+  onebotState.messageById = onebotState.messageById || new Map();
+  onebotState.messageById.set(entry.id, entry);
+  if (onebotState.messages.length > MAX_ONEBOT_MESSAGES) {
+    const removed = onebotState.messages.splice(0, onebotState.messages.length - MAX_ONEBOT_MESSAGES);
+    removed.forEach((item) => onebotState.messageById.delete(item.id));
   }
   return entry;
 }
 
-function updateTelegramMessage(id, status, detail = '') {
-  const entry = telegramState.messageById?.get(id) || telegramState.messages.find((item) => item.id === id);
+function updateOneBotMessage(id, status, detail = '') {
+  const entry = onebotState.messageById?.get(id) || onebotState.messages.find((item) => item.id === id);
   if (!entry) return;
   entry.status = status;
   entry.detail = truncateText(detail, 300);
   if (['printed', 'failed', 'filtered', 'limited', 'blocked'].includes(status)) entry.finishedAt = Date.now();
-  const user = telegramState.users.get(entry.userId);
+  const user = onebotState.users.get(entry.userId);
   if (user && status === 'printed') user.printSuccessCount += 1;
   if (user && status === 'failed') user.printFailedCount += 1;
   if (user && status === 'limited') user.limitedCount += 1;
 }
 
-function effectiveTelegramRules(userId) {
-  const base = { maxPerMinute: telegramState.maxPerMinute, maxCharsPerTask: telegramState.maxCharsPerTask };
-  const override = telegramState.userOverrides.get(String(userId));
+function effectiveOneBotRules(userId) {
+  const base = { maxPerMinute: onebotState.maxPerMinute, maxCharsPerTask: onebotState.maxCharsPerTask };
+  const override = onebotState.userOverrides.get(String(userId));
   if (!override || (override.expiresAt !== null && override.expiresAt <= Date.now())) {
     if (override) {
-      telegramState.userOverrides.delete(String(userId));
-      saveTelegramAdminStore();
+      onebotState.userOverrides.delete(String(userId));
+      saveOneBotAdminStore();
     }
     return base;
   }
@@ -1293,43 +1108,43 @@ function effectiveTelegramRules(userId) {
 }
 
 function userTaskAllowed(userId) {
-  const maxPerMinute = effectiveTelegramRules(userId).maxPerMinute;
+  const maxPerMinute = effectiveOneBotRules(userId).maxPerMinute;
   if (maxPerMinute === 0) return true;
   const now = Date.now();
-  const entries = (telegramState.userTasks.get(String(userId)) || []).filter((timestamp) => now - timestamp < 60_000);
+  const entries = (onebotState.userTasks.get(String(userId)) || []).filter((timestamp) => now - timestamp < 60_000);
   if (entries.length >= maxPerMinute) {
-    telegramState.userTasks.set(String(userId), entries);
+    onebotState.userTasks.set(String(userId), entries);
     return false;
   }
   entries.push(now);
-  telegramState.userTasks.set(String(userId), entries);
+  onebotState.userTasks.set(String(userId), entries);
   return true;
 }
 
-function telegramTaskCharCount(text) {
+function onebotTaskCharCount(text) {
   return Array.from(printableText(text)).length;
 }
 
 function queuedTextLengthForUser(userId) {
-  return telegramState.printQueue
+  return onebotState.printQueue
     .filter((item) => item.userId === userId && item.textLength)
     .reduce((total, item) => total + item.textLength, 0);
 }
 
 function textTaskAllowed(userId, textLength) {
-  const maxCharsPerTask = effectiveTelegramRules(userId).maxCharsPerTask;
+  const maxCharsPerTask = effectiveOneBotRules(userId).maxCharsPerTask;
   if (maxCharsPerTask === 0) return true;
   return queuedTextLengthForUser(userId) + textLength <= maxCharsPerTask;
 }
 
 function activeBlacklistEntry(userId) {
   const key = String(userId);
-  const entry = telegramState.blacklist.get ? telegramState.blacklist.get(key) : telegramState.blacklist.find((item) => item.userId === key);
+  const entry = onebotState.blacklist.get ? onebotState.blacklist.get(key) : onebotState.blacklist.find((item) => item.userId === key);
   if (!entry) return null;
   if (entry.blockedUntil !== null && entry.blockedUntil <= Date.now()) {
-    if (telegramState.blacklist.delete) telegramState.blacklist.delete(key);
-    else telegramState.blacklist = telegramState.blacklist.filter((item) => item.userId !== key);
-    saveTelegramAdminStore();
+    if (onebotState.blacklist.delete) onebotState.blacklist.delete(key);
+    else onebotState.blacklist = onebotState.blacklist.filter((item) => item.userId !== key);
+    saveOneBotAdminStore();
     return null;
   }
   return entry;
@@ -1337,13 +1152,13 @@ function activeBlacklistEntry(userId) {
 
 function blacklistEntries() {
   const entries = [];
-  if (telegramState.blacklist instanceof Map) {
-    for (const userId of telegramState.blacklist.keys()) {
+  if (onebotState.blacklist instanceof Map) {
+    for (const userId of onebotState.blacklist.keys()) {
       const entry = activeBlacklistEntry(userId);
       if (entry) entries.push({ ...entry });
     }
   } else {
-    telegramState.blacklist.forEach((entry) => { if (activeBlacklistEntry(entry.userId)) entries.push({ ...entry }); });
+    onebotState.blacklist.forEach((entry) => { if (activeBlacklistEntry(entry.userId)) entries.push({ ...entry }); });
   }
   return entries;
 }
@@ -1353,29 +1168,29 @@ function blockedUser(userId) {
 }
 
 function setBlacklistEntry(entry) {
-  if (telegramState.blacklist instanceof Map) {
-    telegramState.blacklist.set(String(entry.userId), entry);
-    saveTelegramAdminStore();
+  if (onebotState.blacklist instanceof Map) {
+    onebotState.blacklist.set(String(entry.userId), entry);
+    saveOneBotAdminStore();
   }
 }
 
 function removeBlacklistEntry(userId) {
-  if (telegramState.blacklist instanceof Map) {
-    telegramState.blacklist.delete(String(userId));
-    saveTelegramAdminStore();
+  if (onebotState.blacklist instanceof Map) {
+    onebotState.blacklist.delete(String(userId));
+    saveOneBotAdminStore();
   }
 }
 
 function recordRateLimit(user, reason = '多次触发频率限制') {
   const userId = String(user.userId);
   const now = Date.now();
-  const windowMs = telegramState.rateLimitStrikeWindowMinutes * 60_000;
-  const strikes = (telegramState.rateLimitStrikes.get(userId) || []).filter((timestamp) => now - timestamp < windowMs);
+  const windowMs = onebotState.rateLimitStrikeWindowMinutes * 60_000;
+  const strikes = (onebotState.rateLimitStrikes.get(userId) || []).filter((timestamp) => now - timestamp < windowMs);
   strikes.push(now);
-  telegramState.rateLimitStrikes.set(userId, strikes);
+  onebotState.rateLimitStrikes.set(userId, strikes);
   const strikeNumber = Math.min(strikes.length, 3);
-  const permanent = strikeNumber >= 3 && telegramState.rateLimitBlacklistOnThird;
-  const penaltyMinutes = telegramState.rateLimitPenaltyMinutes[strikeNumber - 1] || 0;
+  const permanent = strikeNumber >= 3 && onebotState.rateLimitBlacklistOnThird;
+  const penaltyMinutes = onebotState.rateLimitPenaltyMinutes[strikeNumber - 1] || 0;
   const entry = {
     userId,
     name: String(user.name || '未知用户'),
@@ -1388,46 +1203,46 @@ function recordRateLimit(user, reason = '多次触发频率限制') {
   };
   if (permanent || penaltyMinutes > 0) setBlacklistEntry(entry);
   const action = permanent ? '已永久拉黑' : penaltyMinutes > 0 ? `封禁 ${penaltyMinutes} 分钟` : '本档未设置临时封禁';
-  addTelegramLog('blocked', `${entry.name}${entry.username ? `（${entry.username}）` : ''}`, action);
+  addOneBotLog('blocked', `${entry.name}${entry.username ? `（${entry.username}）` : ''}`, action);
   return entry;
 }
 
-const TELEGRAM_LINK_MARKERS = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
+const ONEBOT_LINK_MARKERS = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
 
-function telegramLinkMarker(index) {
-  return TELEGRAM_LINK_MARKERS[index - 1] || `(${index})`;
+function onebotLinkMarker(index) {
+  return ONEBOT_LINK_MARKERS[index - 1] || `(${index})`;
 }
 
-function telegramTextNodes(text, options = {}) {
+function onebotTextNodes(text, options = {}) {
   text = printableText(text);
   const width = Number(options.width) === 1 ? 1 : 0;
   const capacity = width === 1 ? 16 : 32;
-  return telegramContentNodes(splitTextIntoLines(text, capacity), options);
+  return onebotContentNodes(splitTextIntoLines(text, capacity), options);
 }
 
-function telegramEntityEnd(entity) {
+function onebotEntityEnd(entity) {
   return entity.offset + entity.length;
 }
 
-function telegramFormattedTextNodes(text, entities = [], prefix = '') {
+function onebotFormattedTextNodes(text, entities = [], prefix = '') {
   const source = String(text ?? '');
   const validEntities = (Array.isArray(entities) ? entities : [])
     .map((entity) => ({ ...entity, offset: Number(entity.offset), length: Number(entity.length) }))
-    .filter((entity) => Number.isInteger(entity.offset) && Number.isInteger(entity.length) && entity.offset >= 0 && entity.length > 0 && telegramEntityEnd(entity) <= source.length);
+    .filter((entity) => Number.isInteger(entity.offset) && Number.isInteger(entity.length) && entity.offset >= 0 && entity.length > 0 && onebotEntityEnd(entity) <= source.length);
   const links = validEntities
     .filter((entity) => ['text_link', 'url'].includes(entity.type))
     .sort((left, right) => left.offset - right.offset)
     .map((entity) => ({
       entity,
-      url: entity.type === 'text_link' && entity.url ? String(entity.url) : source.slice(entity.offset, telegramEntityEnd(entity)),
+      url: entity.type === 'text_link' && entity.url ? String(entity.url) : source.slice(entity.offset, onebotEntityEnd(entity)),
     }))
-    .filter((link) => telegramQrAllowed(link.url))
-    .map((link, index) => ({ ...link, marker: telegramLinkMarker(index + 1) }));
+    .filter((link) => onebotQrAllowed(link.url))
+    .map((link, index) => ({ ...link, marker: onebotLinkMarker(index + 1) }));
   const linkByEntity = new Map(links.map((link) => [link.entity, link]));
   const boundaries = new Set([0, source.length]);
   validEntities.forEach((entity) => {
     boundaries.add(entity.offset);
-    boundaries.add(telegramEntityEnd(entity));
+    boundaries.add(onebotEntityEnd(entity));
   });
   const positions = [...boundaries].sort((left, right) => left - right);
   const nodes = [];
@@ -1435,7 +1250,7 @@ function telegramFormattedTextNodes(text, entities = [], prefix = '') {
 
   const appendLine = () => {
     const style = { height: line.bold ? 1 : line.italic ? 1 : 0, width: line.bold ? 1 : 0 };
-    nodes.push(...telegramTextNodes(line.text, style));
+    nodes.push(...onebotTextNodes(line.text, style));
     line = { text: '', bold: false, italic: false };
   };
 
@@ -1443,7 +1258,7 @@ function telegramFormattedTextNodes(text, entities = [], prefix = '') {
     const start = positions[index];
     const end = positions[index + 1];
     const chunk = source.slice(start, end);
-    const active = validEntities.filter((entity) => entity.offset <= start && telegramEntityEnd(entity) >= end);
+    const active = validEntities.filter((entity) => entity.offset <= start && onebotEntityEnd(entity) >= end);
     const link = active.map((entity) => linkByEntity.get(entity)).find(Boolean);
     const parts = chunk.split(/\r?\n/);
     parts.forEach((part, partIndex) => {
@@ -1452,67 +1267,67 @@ function telegramFormattedTextNodes(text, entities = [], prefix = '') {
       line.italic ||= active.some((entity) => entity.type === 'italic');
       if (partIndex < parts.length - 1) appendLine();
     });
-    if (link && telegramEntityEnd(link.entity) === end) line.text += link.marker;
+    if (link && onebotEntityEnd(link.entity) === end) line.text += link.marker;
   }
   appendLine();
   return { nodes, links };
 }
 
-function telegramLinkNodes(links) {
+function onebotLinkNodes(links) {
   return links.flatMap((link) => [
     { icon: { value: printableText(link.url), style: { justification: 1 }, type: 1 } },
-    ...telegramTextNodes(link.marker),
+    ...onebotTextNodes(link.marker),
   ]);
 }
 
-function telegramMessageNodes(sender, text, entities, hasUnsupportedCharacters = false) {
-  const formatted = telegramFormattedTextNodes(text, entities, sender ? `${sender}：` : '');
-  const nodes = [...formatted.nodes, ...telegramLinkNodes(formatted.links)];
+function onebotMessageNodes(sender, text, entities, hasUnsupportedCharacters = false) {
+  const formatted = onebotFormattedTextNodes(text, entities, sender ? `${sender}：` : '');
+  const nodes = [...formatted.nodes, ...onebotLinkNodes(formatted.links)];
   if (hasUnsupportedCharacters) {
-    nodes.push(...telegramTextNodes('-----------'));
-    nodes.push(...telegramTextNodes('该消息含有不支持打印的字符'));
+    nodes.push(...onebotTextNodes('-----------'));
+    nodes.push(...onebotTextNodes('该消息含有不支持打印的字符'));
   }
   return nodes;
 }
 
-function telegramPrintingReply(item) {
+function onebotPrintingReply(item) {
   const warning = item.unsupportedCharacters?.length
     ? `消息中的${item.unsupportedCharacters.join(' ')} 无法打印，将忽略`
     : '';
-  return [telegramState.replyPrinting, warning].filter(Boolean).join('\n');
+  return [onebotState.replyPrinting, warning].filter(Boolean).join('\n');
 }
 
-function telegramPayload(items) {
+function onebotPayload(items) {
   const values = Array.isArray(items) ? items : [items];
-  const root = telegramPrintNodes(values.map((item) => ({
+  const root = onebotPrintNodes(values.map((item) => ({
     ...item,
-    nodes: item.nodes || telegramTextNodes(item.printText),
-  })), telegramTextNodes('-----------'));
+    nodes: item.nodes || onebotTextNodes(item.printText),
+  })), onebotTextNodes('-----------'));
   return {
-    device_sn: telegramState.deviceSn,
+    device_sn: onebotState.deviceSn,
     ad_content: { user_define_template: { root } },
-    account_type: telegramState.accountType,
-    sid: telegramState.sid,
+    account_type: onebotState.accountType,
+    sid: onebotState.sid,
   };
 }
 
 function flushPrintQueue(generation) {
-  if (telegramState.printFlushTimer) {
-    clearTimeout(telegramState.printFlushTimer);
-    telegramState.printFlushTimer = null;
+  if (onebotState.printFlushTimer) {
+    clearTimeout(onebotState.printFlushTimer);
+    onebotState.printFlushTimer = null;
   }
-  if (!telegramState.printQueue.length || telegramState.generation !== generation || !telegramState.running) return;
-  const batch = telegramState.printQueue.splice(0);
-  const payload = Buffer.from(JSON.stringify(telegramPayload(batch)));
-  log('INFO', 'Telegram 批量打印已转发', `${batch.length} 条消息，${payload.length} bytes -> ${TARGET_HOST}`);
+  if (!onebotState.printQueue.length || onebotState.generation !== generation || !onebotState.running) return;
+  const batch = onebotState.printQueue.splice(0);
+  const payload = Buffer.from(JSON.stringify(onebotPayload(batch)));
+  log('INFO', 'OneBot 批量打印已转发', `${batch.length} 条消息，${payload.length} bytes -> ${TARGET_HOST}`);
   batch.forEach((item) => {
-    updateTelegramMessage(item.historyId, 'printing');
-    addTelegramLog('printing', item.printText, `批量任务 ${batch.length} 条消息`);
-    telegramReply(item.chatId, telegramPrintingReply(item), generation);
+    updateOneBotMessage(item.historyId, 'printing');
+    addOneBotLog('printing', item.printText, `批量任务 ${batch.length} 条消息`);
+    onebotReply(item.chatId, onebotPrintingReply(item), generation);
   });
-  forwardPrint(telegramState.sid, payload, (error, statusCode, headers, body) => {
-    if (error) log('ERROR', 'Telegram 打印接口请求失败', error.message);
-    else log(statusCode >= 200 && statusCode < 300 ? 'INFO' : 'WARN', 'Telegram 打印接口已返回', `HTTP ${statusCode}，${body.length} bytes`);
+  forwardPrint(onebotState.sid, payload, (error, statusCode, headers, body) => {
+    if (error) log('ERROR', 'OneBot 打印接口请求失败', error.message);
+    else log(statusCode >= 200 && statusCode < 300 ? 'INFO' : 'WARN', 'OneBot 打印接口已返回', `HTTP ${statusCode}，${body.length} bytes`);
     const requestError = typeof error?.message === 'string' ? error.message.trim() : '';
     let result = { ok: false, error: requestError || '打印请求失败', replyError: requestError };
     if (!error) {
@@ -1529,79 +1344,79 @@ function flushPrintQueue(generation) {
           : { ok: false, error: parseError.message, replyError: '' };
       }
     }
-    if (telegramState.generation !== generation) return;
+    if (onebotState.generation !== generation) return;
     batch.forEach(async (item) => {
       if (result.ok) {
-        updateTelegramMessage(item.historyId, 'printed');
-        telegramState.lastMessage = item.printText;
-        telegramState.error = '';
-        addTelegramLog('printed', item.printText, `批量任务 ${batch.length} 条消息`);
-        await telegramReply(item.chatId, telegramState.replyPrinted, generation);
+        updateOneBotMessage(item.historyId, 'printed');
+        onebotState.lastMessage = item.printText;
+        onebotState.error = '';
+        addOneBotLog('printed', item.printText, `批量任务 ${batch.length} 条消息`);
+        await onebotReply(item.chatId, onebotState.replyPrinted, generation);
       } else {
-        updateTelegramMessage(item.historyId, 'failed', result.error);
-        telegramState.error = result.error;
-        addTelegramLog('failed', item.printText, result.error);
-        await telegramReply(item.chatId, result.replyError || telegramState.replyPrintFailed, generation);
+        updateOneBotMessage(item.historyId, 'failed', result.error);
+        onebotState.error = result.error;
+        addOneBotLog('failed', item.printText, result.error);
+        await onebotReply(item.chatId, result.replyError || onebotState.replyPrintFailed, generation);
       }
     });
-    saveTelegramAdminStore();
+    saveOneBotAdminStore();
   });
 }
 
 function schedulePrintFlush(generation) {
-  if (telegramState.printFlushTimer) clearTimeout(telegramState.printFlushTimer);
-  telegramState.printFlushTimer = setTimeout(() => flushPrintQueue(generation), 500);
+  if (onebotState.printFlushTimer) clearTimeout(onebotState.printFlushTimer);
+  onebotState.printFlushTimer = setTimeout(() => flushPrintQueue(generation), 500);
 }
 
 function enqueuePrintMessage(item, generation) {
-  updateTelegramMessage(item.historyId, 'queued');
-  saveTelegramAdminStore();
-  telegramState.printQueue.push(item);
+  updateOneBotMessage(item.historyId, 'queued');
+  saveOneBotAdminStore();
+  onebotState.printQueue.push(item);
   schedulePrintFlush(generation);
 }
 
 function pausePrintFlushForFollowingImage(userId) {
-  const previous = telegramState.printQueue[telegramState.printQueue.length - 1];
-  if (!telegramState.printFlushTimer || previous?.userId !== userId || previous.kind !== 'text') return false;
-  clearTimeout(telegramState.printFlushTimer);
-  telegramState.printFlushTimer = null;
+  const previous = onebotState.printQueue[onebotState.printQueue.length - 1];
+  if (!onebotState.printFlushTimer || previous?.userId !== userId || previous.kind !== 'text') return false;
+  clearTimeout(onebotState.printFlushTimer);
+  onebotState.printFlushTimer = null;
   return true;
 }
 
-function formatTelegramUser(user) {
+function formatOneBotUser(user) {
   if (!user) return '未知用户';
   return `${user.name || '未知用户'}${user.username ? ` (@${user.username})` : ''} [${user.userId}]`;
 }
 
-function formatTelegramTime(value) {
+function formatOneBotTime(value) {
   if (!value) return '-';
   try { return new Date(value).toLocaleString('zh-CN'); } catch { return '-'; }
 }
 
-function telegramAdminAuthorized(userId) {
-  return telegramState.adminUserIds.has(String(userId));
+function onebotAdminAuthorized(userId) {
+  return onebotState.adminUserIds.has(String(userId));
 }
 
-function recordTelegramAudit(adminUserId, command, targetUserId, before, after, ok = true, error = '') {
-  telegramState.auditLogs.push({
+function recordOneBotAudit(adminUserId, command, targetUserId, before, after, ok = true, error = '') {
+  onebotState.auditLogs.push({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     time: new Date().toISOString(),
     adminUserId: String(adminUserId),
     command: truncateText(command, 200),
-    targetUserId: parseTelegramUserId(targetUserId),
+    targetUserId: parseOneBotUserId(targetUserId),
     before: truncateText(before, 500),
     after: truncateText(after, 500),
     ok,
     error: truncateText(error, 300),
   });
-  if (telegramState.auditLogs.length > MAX_TELEGRAM_AUDIT_LOGS) telegramState.auditLogs.splice(0, telegramState.auditLogs.length - MAX_TELEGRAM_AUDIT_LOGS);
-  saveTelegramAdminStore();
+  if (onebotState.auditLogs.length > MAX_ONEBOT_AUDIT_LOGS) onebotState.auditLogs.splice(0, onebotState.auditLogs.length - MAX_ONEBOT_AUDIT_LOGS);
+  saveOneBotAdminStore();
 }
 
-function telegramAdminHelp() {
+function onebotAdminHelp() {
   return [
     '管理员指令：',
-    '/whoami 查看自己的 Telegram ID',
+    '/whoami 查看自己的 OneBot ID',
     '/users [recent|blocked] 查看用户',
     '/user <用户ID> 查看用户详情',
     '/messages <用户ID> 查看最近消息',
@@ -1618,33 +1433,33 @@ function telegramAdminHelp() {
 }
 
 function adminCommandTarget(args) {
-  return parseTelegramUserId(args[0]);
+  return parseOneBotUserId(args[0]);
 }
 
 function userOverrideText(userId) {
-  let override = telegramState.userOverrides.get(String(userId));
+  let override = onebotState.userOverrides.get(String(userId));
   if (override?.expiresAt !== null && override.expiresAt <= Date.now()) {
-    telegramState.userOverrides.delete(String(userId));
-    saveTelegramAdminStore();
+    onebotState.userOverrides.delete(String(userId));
+    saveOneBotAdminStore();
     override = null;
   }
   if (!override) return '跟随全局限制';
-  const expires = override.expiresAt === null ? '永久' : `至 ${formatTelegramTime(override.expiresAt)}`;
+  const expires = override.expiresAt === null ? '永久' : `至 ${formatOneBotTime(override.expiresAt)}`;
   return `rpm=${override.maxPerMinute === null ? '全局' : override.maxPerMinute}，chars=${override.maxCharsPerTask === null ? '全局' : override.maxCharsPerTask}，${expires}`;
 }
 
-async function handleTelegramAdminCommand(message, userProfile, generation) {
+async function handleOneBotAdminCommand(message, userProfile, generation) {
   const text = typeof message.text === 'string' ? message.text : '';
-  const parsed = parseTelegramCommand(text);
+  const parsed = parseOneBotCommand(text);
   if (!parsed) return false;
   const userId = String(userProfile.userId);
   if (parsed.command === 'whoami') {
-    await telegramReply(message.chat?.id, `你的 Telegram user_id 是 ${userId}。`, generation);
+    await onebotReply(message.chat?.id, `你的 OneBot user_id 是 ${userId}。`, generation);
     return true;
   }
-  if (!telegramAdminAuthorized(userId)) {
-    recordTelegramAudit(userId, text, '', '', '', false, 'unauthorized');
-    await telegramReply(message.chat?.id, '无权限执行管理员指令。', generation);
+  if (!onebotAdminAuthorized(userId)) {
+    recordOneBotAudit(userId, text, '', '', '', false, 'unauthorized');
+    await onebotReply(message.chat?.id, '无权限执行管理员指令。', generation);
     return true;
   }
   let reply = '';
@@ -1656,42 +1471,42 @@ async function handleTelegramAdminCommand(message, userProfile, generation) {
   try {
     const { command, args } = parsed;
     if (command === 'admin' || command === 'help') {
-      reply = telegramAdminHelp();
+      reply = onebotAdminHelp();
     } else if (command === 'users') {
-      const users = [...telegramState.users.values()]
+      const users = [...onebotState.users.values()]
         .filter((user) => args[0] !== 'blocked' || Boolean(activeBlacklistEntry(user.userId)))
         .sort((left, right) => (args[0] === 'recent' ? right.lastSeenAt - left.lastSeenAt : right.messageCount - left.messageCount));
-      reply = users.length ? [`用户数：${users.length}`, ...users.slice(0, 50).map((user) => `${formatTelegramUser(user)}\n最近：${formatTelegramTime(user.lastSeenAt)}，消息 ${user.messageCount}，成功 ${user.printSuccessCount}，失败 ${user.printFailedCount}`)].join('\n') : '暂无用户记录。';
+      reply = users.length ? [`用户数：${users.length}`, ...users.slice(0, 50).map((user) => `${formatOneBotUser(user)}\n最近：${formatOneBotTime(user.lastSeenAt)}，消息 ${user.messageCount}，成功 ${user.printSuccessCount}，失败 ${user.printFailedCount}`)].join('\n') : '暂无用户记录。';
     } else if (command === 'user') {
       targetUserId = adminCommandTarget(args);
       if (!targetUserId) throw new Error('用法：/user <用户ID>');
-      const user = telegramState.users.get(targetUserId);
+      const user = onebotState.users.get(targetUserId);
       if (!user) { reply = '未找到该用户。'; }
       else {
         const blocked = activeBlacklistEntry(targetUserId);
-        reply = [`用户：${formatTelegramUser(user)}`, `首次：${formatTelegramTime(user.firstSeenAt)}`, `最近：${formatTelegramTime(user.lastSeenAt)}`, `消息：${user.messageCount}，成功 ${user.printSuccessCount}，失败 ${user.printFailedCount}，限流 ${user.limitedCount}`, `限制：${userOverrideText(targetUserId)}`, blocked ? `黑名单：${blocked.blockedUntil === null ? '永久' : formatTelegramTime(blocked.blockedUntil)}，${blocked.reason}` : '黑名单：否', `最近内容：${user.lastMessagePreview || '-'}`].join('\n');
+        reply = [`用户：${formatOneBotUser(user)}`, `首次：${formatOneBotTime(user.firstSeenAt)}`, `最近：${formatOneBotTime(user.lastSeenAt)}`, `消息：${user.messageCount}，成功 ${user.printSuccessCount}，失败 ${user.printFailedCount}，限流 ${user.limitedCount}`, `限制：${userOverrideText(targetUserId)}`, blocked ? `黑名单：${blocked.blockedUntil === null ? '永久' : formatOneBotTime(blocked.blockedUntil)}，${blocked.reason}` : '黑名单：否', `最近内容：${user.lastMessagePreview || '-'}`].join('\n');
       }
     } else if (command === 'messages') {
       targetUserId = adminCommandTarget(args);
       if (!targetUserId) throw new Error('用法：/messages <用户ID>');
-      const entries = telegramState.messages.filter((entry) => entry.userId === targetUserId).slice(-30).reverse();
-      reply = entries.length ? entries.map((entry) => `${formatTelegramTime(entry.receivedAt)} [${entry.status}] ${entry.type}\n${entry.preview}${entry.detail ? `\n原因：${entry.detail}` : ''}`).join('\n\n') : '该用户暂无消息记录。';
+      const entries = onebotState.messages.filter((entry) => entry.userId === targetUserId).slice(-30).reverse();
+      reply = entries.length ? entries.map((entry) => `${formatOneBotTime(entry.receivedAt)} [${entry.status}] ${entry.type}\n${entry.preview}${entry.detail ? `\n原因：${entry.detail}` : ''}`).join('\n\n') : '该用户暂无消息记录。';
     } else if (command === 'limits') {
-      reply = `全局限制：每分钟 ${telegramState.maxPerMinute === 0 ? '不限' : telegramState.maxPerMinute} 个任务；单次 ${telegramState.maxCharsPerTask === 0 ? '不限' : `${telegramState.maxCharsPerTask} 字`}。\n单用户覆盖数：${telegramState.userOverrides.size}`;
+      reply = `全局限制：每分钟 ${onebotState.maxPerMinute === 0 ? '不限' : onebotState.maxPerMinute} 个任务；单次 ${onebotState.maxCharsPerTask === 0 ? '不限' : `${onebotState.maxCharsPerTask} 字`}。\n单用户覆盖数：${onebotState.userOverrides.size}`;
     } else if (command === 'limit') {
       targetUserId = adminCommandTarget(args);
       if (!targetUserId || !['rpm', 'chars', 'reset'].includes(args[1])) throw new Error('用法：/limit <用户ID> rpm|chars <数值> [时长]，或 /limit <用户ID> reset');
       before = userOverrideText(targetUserId);
       if (args[1] === 'reset') {
-        telegramState.userOverrides.delete(targetUserId);
+        onebotState.userOverrides.delete(targetUserId);
       } else {
         const value = Number(args[2]);
         if (!Number.isInteger(value) || value < 0 || (args[1] === 'rpm' && value > 100) || (args[1] === 'chars' && value > 4294967295)) throw new Error('限制数值无效。');
         const durationToken = args[3];
         const duration = durationToken ? parseDuration(durationToken, { allowPermanent: true }) : null;
         if (durationToken && duration === 0) throw new Error('时长格式无效，请使用 30m、2h、7d 或 perm。');
-        const old = telegramState.userOverrides.get(targetUserId) || { userId: targetUserId, maxPerMinute: null, maxCharsPerTask: null };
-        telegramState.userOverrides.set(targetUserId, {
+        const old = onebotState.userOverrides.get(targetUserId) || { userId: targetUserId, maxPerMinute: null, maxCharsPerTask: null };
+        onebotState.userOverrides.set(targetUserId, {
           ...old,
           userId: targetUserId,
           maxPerMinute: args[1] === 'rpm' ? value : (old.maxPerMinute ?? null),
@@ -1702,15 +1517,15 @@ async function handleTelegramAdminCommand(message, userProfile, generation) {
         });
       }
       after = userOverrideText(targetUserId);
-      saveTelegramAdminStore();
+      saveOneBotAdminStore();
       reply = `用户 ${targetUserId} 的限制已更新：${after}`;
     } else if (command === 'blacklist') {
       const entries = blacklistEntries();
-      reply = entries.length ? entries.map((entry) => `${entry.userId} ${entry.name}${entry.username ? ` (@${entry.username})` : ''}\n${entry.blockedUntil === null ? '永久' : formatTelegramTime(entry.blockedUntil)}：${entry.reason}`).join('\n\n') : '黑名单为空。';
+      reply = entries.length ? entries.map((entry) => `${entry.userId} ${entry.name}${entry.username ? ` (@${entry.username})` : ''}\n${entry.blockedUntil === null ? '永久' : formatOneBotTime(entry.blockedUntil)}：${entry.reason}`).join('\n\n') : '黑名单为空。';
     } else if (command === 'block') {
       targetUserId = adminCommandTarget(args);
       if (!targetUserId) throw new Error('用法：/block <用户ID> [时长] [原因]');
-      const target = telegramState.users.get(targetUserId) || { userId: targetUserId, name: '未知用户', username: '' };
+      const target = onebotState.users.get(targetUserId) || { userId: targetUserId, name: '未知用户', username: '' };
       const durationToken = args[1] && /^(?:\d+(?:\.\d+)?[mhdw]|perm|permanent|永久|0)$/i.test(args[1]) ? args[1] : '';
       const duration = durationToken ? parseDuration(durationToken, { allowPermanent: true }) : null;
       if (durationToken && duration === 0) throw new Error('时长格式无效。');
@@ -1724,21 +1539,21 @@ async function handleTelegramAdminCommand(message, userProfile, generation) {
       if (!targetUserId) throw new Error('用法：/unblock <用户ID>');
       before = activeBlacklistEntry(targetUserId) ? '已封禁' : '未封禁';
       removeBlacklistEntry(targetUserId);
-      telegramState.rateLimitStrikes.delete(targetUserId);
+      onebotState.rateLimitStrikes.delete(targetUserId);
       after = '未封禁';
-      saveTelegramAdminStore();
+      saveOneBotAdminStore();
       reply = `用户 ${targetUserId} 已解除封禁。`;
     } else if (command === 'status') {
-      const printed = [...telegramState.messages].filter((entry) => entry.status === 'printed').length;
-      const failed = [...telegramState.messages].filter((entry) => entry.status === 'failed').length;
-      reply = [`监听：${telegramState.running ? '运行中' : '已停止'}`, `队列：${telegramState.printQueue.length}`, `用户：${telegramState.users.size}`, `消息：${telegramState.messages.length}`, `成功：${printed}，失败：${failed}`, `黑名单：${blacklistEntries().length}`, `最近打印：${telegramState.lastMessage || '-'}`, telegramState.error ? `错误：${telegramState.error}` : '错误：无'].join('\n');
+      const printed = [...onebotState.messages].filter((entry) => entry.status === 'printed').length;
+      const failed = [...onebotState.messages].filter((entry) => entry.status === 'failed').length;
+      reply = [`监听：${onebotState.running ? '运行中' : '已停止'}`, `队列：${onebotState.printQueue.length}`, `用户：${onebotState.users.size}`, `消息：${onebotState.messages.length}`, `成功：${printed}，失败：${failed}`, `黑名单：${blacklistEntries().length}`, `最近打印：${onebotState.lastMessage || '-'}`, onebotState.error ? `错误：${onebotState.error}` : '错误：无'].join('\n');
     } else if (command === 'logs') {
       const mode = args[0] || '';
-      let logs = telegramState.logs;
+      let logs = onebotState.logs;
       if (mode === 'failed' || mode === 'limited') logs = logs.filter((entry) => entry.type === mode || (mode === 'failed' && entry.type === 'reply_failed'));
-      if (mode === 'user' && parseTelegramUserId(args[1])) {
-        const userMessages = telegramState.messages.filter((entry) => entry.userId === args[1]).slice(-40).reverse();
-        reply = userMessages.length ? userMessages.map((entry) => `${formatTelegramTime(entry.receivedAt)} [${entry.status}] ${entry.preview}${entry.detail ? ` | ${entry.detail}` : ''}`).join('\n') : '暂无匹配日志。';
+      if (mode === 'user' && parseOneBotUserId(args[1])) {
+        const userMessages = onebotState.messages.filter((entry) => entry.userId === args[1]).slice(-40).reverse();
+        reply = userMessages.length ? userMessages.map((entry) => `${formatOneBotTime(entry.receivedAt)} [${entry.status}] ${entry.preview}${entry.detail ? ` | ${entry.detail}` : ''}`).join('\n') : '暂无匹配日志。';
       } else {
         reply = logs.length ? logs.slice(-40).reverse().map((entry) => `${entry.time} [${entry.type}] ${entry.message}${entry.detail ? ` | ${entry.detail}` : ''}`).join('\n') : '暂无匹配日志。';
       }
@@ -1750,140 +1565,93 @@ async function handleTelegramAdminCommand(message, userProfile, generation) {
     error = commandError.message;
     reply = `操作失败：${error}`;
   }
-  recordTelegramAudit(userId, text, targetUserId, before, after, ok, error);
-  for (const page of paginateTelegramText(reply)) await telegramReply(message.chat?.id, page, generation);
+  recordOneBotAudit(userId, text, targetUserId, before, after, ok, error);
+  for (const page of paginateOneBotText(reply)) await onebotReply(message.chat?.id, page, generation);
   return true;
 }
 
-async function telegramLoop(generation) {
-  while (telegramState.running && telegramState.generation === generation) {
+async function onebotLoop(generation) {
+  while (onebotState.running && onebotState.generation === generation) {
     try {
-      const updates = await telegramRequest(telegramState.apiBase, telegramState.token, 'getUpdates', { offset: telegramState.offset, timeout: 45, allowed_updates: ['message'] }, 50000, telegramState.proxyUrl);
-      if (!telegramState.running || telegramState.generation !== generation) return;
-      telegramState.error = '';
-      telegramState.retryCount = 0;
+      const updates = await onebotClient.nextUpdates();
+      if (!onebotState.running || onebotState.generation !== generation) return;
+      onebotState.error = '';
+      onebotState.retryCount = 0;
       for (const update of updates || []) {
-        telegramState.offset = update.update_id + 1;
         const message = update.message;
         if (!message) continue;
-        const sender = telegramSenderName(message.from);
+        const sender = onebotSenderName(message.from);
         if (message.chat?.type !== 'private') {
-          addTelegramLog('ignored', `${sender} 的 ${message.chat?.type || '非私聊'} 消息已忽略`, 'only_private_chat');
+          addOneBotLog('ignored', `${sender} 的 ${message.chat?.type || '非私聊'} 消息已忽略`, 'only_private_chat');
           continue;
         }
         const userId = String(message.from?.id || message.chat?.id || 'unknown');
         const userProfile = { userId, name: sender, username: String(message.from?.username || '') };
-        upsertTelegramUser(userProfile, message);
-        const historyEntry = recordTelegramMessage(message, update.update_id, userProfile);
-        saveTelegramAdminStore();
+        upsertOneBotUser(userProfile, message);
+        const historyEntry = recordOneBotMessage(message, update.update_id, userProfile);
+        saveOneBotAdminStore();
         const text = typeof message.text === 'string' ? message.text : '';
         const unsupportedMessageCharacters = unsupportedCharacters(text);
         const printableMessageText = printableText(text).trim();
         const caption = typeof message.caption === 'string' ? message.caption : '';
-        if (await handleTelegramAdminCommand(message, userProfile, generation)) {
-          updateTelegramMessage(historyEntry.id, 'filtered', 'admin_command');
-          saveTelegramAdminStore();
+        if (await handleOneBotAdminCommand(message, userProfile, generation)) {
+          updateOneBotMessage(historyEntry.id, 'filtered', 'admin_command');
+          saveOneBotAdminStore();
           continue;
         }
         if (text.trim().startsWith('/') || caption.trim().startsWith('/')) {
-          updateTelegramMessage(historyEntry.id, 'filtered', 'telegram_command');
-          saveTelegramAdminStore();
-          addTelegramLog('ignored', `${sender} 的指令已忽略`, 'telegram_command');
+          updateOneBotMessage(historyEntry.id, 'filtered', 'onebot_command');
+          saveOneBotAdminStore();
+          addOneBotLog('ignored', `${sender} 的指令已忽略`, 'onebot_command');
           continue;
         }
         const existingBlacklist = blockedUser(userId);
         if (existingBlacklist) {
-          updateTelegramMessage(historyEntry.id, 'blocked', existingBlacklist.reason);
-          saveTelegramAdminStore();
-          addTelegramLog('blocked', `${sender}${userProfile.username ? `（${userProfile.username}）` : ''} 的消息已拦截`, existingBlacklist.blockedUntil === null ? '永久拉黑' : `封禁至 ${new Date(existingBlacklist.blockedUntil).toLocaleString('zh-CN')}`);
+          updateOneBotMessage(historyEntry.id, 'blocked', existingBlacklist.reason);
+          saveOneBotAdminStore();
+          addOneBotLog('blocked', `${sender}${userProfile.username ? `（${userProfile.username}）` : ''} 的消息已拦截`, existingBlacklist.blockedUntil === null ? '永久拉黑' : `封禁至 ${new Date(existingBlacklist.blockedUntil).toLocaleString('zh-CN')}`);
           recordRateLimit(userProfile, '封控期间再次触发频率限制');
-          await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
+          await onebotReply(message.chat?.id, onebotState.replyRateLimited, generation);
           continue;
         }
-        if (message.sticker) {
-          if (!telegramState.stickerEnabled) {
-            updateTelegramMessage(historyEntry.id, 'filtered', 'sticker_printing_disabled');
-            saveTelegramAdminStore();
-            addTelegramLog('filtered', `${sender} 收到了 sticker，已跳过`, 'sticker_printing_disabled');
-            await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
-            continue;
-          }
-          if (message.sticker.is_animated && !telegramState.webmStickerEnabled) {
-            updateTelegramMessage(historyEntry.id, 'filtered', 'unsupported_animated_sticker');
-            saveTelegramAdminStore();
-            addTelegramLog('filtered', `${sender} 收到了动画 sticker，已跳过`, 'unsupported_animated_sticker');
-            await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
-            continue;
-          }
-          try {
-            const stickerResult = await processTelegramSticker(message.sticker, {
-              webmEnabled: telegramState.webmStickerEnabled,
-              webmFrame: telegramState.webmStickerFrame,
-            });
-            addTelegramLog('received', `${sender}：sticker`, stickerResult.cached ? cacheHitDetail(telegramState.imageHost) : '已处理并上传图片');
-            const alreadyQueuedForUser = telegramState.printQueue.some((item) => item.userId === userId);
-            if (!alreadyQueuedForUser && !userTaskAllowed(userId)) {
-              addTelegramLog('limited', `${sender}：sticker`, `超过每分钟 ${telegramState.maxPerMinute} 条任务`);
-              recordRateLimit(userProfile);
-              await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
-              continue;
-            }
-            enqueuePrintMessage({
-              userId,
-              chatId: message.chat?.id,
-              historyId: historyEntry.id,
-              printText: `${sender}：sticker`,
-              nodes: [
-                ...telegramTextNodes(sender),
-                { icon: { value: stickerResult.directUrl, style: { justification: 1 }, type: 3 } },
-              ],
-            }, generation);
-          } catch (error) {
-            updateTelegramMessage(historyEntry.id, error.code === 'UNSUPPORTED_STICKER' ? 'filtered' : 'failed', error.message || 'sticker 处理失败');
-            saveTelegramAdminStore();
-            const detail = error.message || 'sticker 处理失败';
-            const unsupportedSticker = error.code === 'UNSUPPORTED_STICKER';
-            addTelegramLog(unsupportedSticker ? 'filtered' : 'failed', `${sender} 的 sticker 未打印`, detail);
-            await telegramReply(message.chat?.id, unsupportedSticker ? telegramState.replyUnsupported : telegramState.replyPrintFailed, generation);
-          }
-          continue;
-        }
+
+
         if (message.photo) {
-          if (!telegramState.photoEnabled) {
-            updateTelegramMessage(historyEntry.id, 'filtered', 'photo_printing_disabled');
-            saveTelegramAdminStore();
-            addTelegramLog('filtered', `${sender} 收到了图片，已跳过`, 'photo_printing_disabled');
-            await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
+          if (!onebotState.photoEnabled) {
+            updateOneBotMessage(historyEntry.id, 'filtered', 'photo_printing_disabled');
+            saveOneBotAdminStore();
+            addOneBotLog('filtered', `${sender} 收到了图片，已跳过`, 'photo_printing_disabled');
+            await onebotReply(message.chat?.id, onebotState.replyUnsupported, generation);
             continue;
           }
           const printableCaption = printableText(caption).trim();
           const captionCharacters = unsupportedCharacters(caption);
-          const captionLength = telegramTaskCharCount(printableCaption);
+          const captionLength = onebotTaskCharCount(printableCaption);
           if (printableCaption && !textTaskAllowed(userId, captionLength)) {
-            updateTelegramMessage(historyEntry.id, 'limited', `单次打印文字超过 ${effectiveTelegramRules(userId).maxCharsPerTask} 字限制`);
-            saveTelegramAdminStore();
-            addTelegramLog('limited', `${sender}：${printableCaption}`, `单次打印文字超过 ${telegramState.maxCharsPerTask} 字限制`);
-            await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
+            updateOneBotMessage(historyEntry.id, 'limited', `单次打印文字超过 ${effectiveOneBotRules(userId).maxCharsPerTask} 字限制`);
+            saveOneBotAdminStore();
+            addOneBotLog('limited', `${sender}：${printableCaption}`, `单次打印文字超过 ${onebotState.maxCharsPerTask} 字限制`);
+            await onebotReply(message.chat?.id, onebotState.replyRateLimited, generation);
             continue;
           }
           const pausedPrintFlush = pausePrintFlushForFollowingImage(userId);
           let photoEnqueued = false;
           try {
             const photo = Array.isArray(message.photo) ? message.photo[message.photo.length - 1] : null;
-            const photoResult = await processTelegramPhoto(photo);
-            addTelegramLog('received', `${sender}：图片${printableCaption ? ` ${printableCaption}` : ''}`, photoResult.cached ? cacheHitDetail(telegramState.imageHost) : '已处理并上传图片');
-            const alreadyQueuedForUser = telegramState.printQueue.some((item) => item.userId === userId);
+            const photoResult = await processOneBotPhoto(photo);
+            addOneBotLog('received', `${sender}：图片${printableCaption ? ` ${printableCaption}` : ''}`, photoResult.cached ? cacheHitDetail(onebotState.imageHost) : '已处理并上传图片');
+            const alreadyQueuedForUser = onebotState.printQueue.some((item) => item.userId === userId);
             if (!alreadyQueuedForUser && !userTaskAllowed(userId)) {
-              updateTelegramMessage(historyEntry.id, 'limited', `超过每分钟 ${effectiveTelegramRules(userId).maxPerMinute} 条任务`);
-              saveTelegramAdminStore();
-              addTelegramLog('limited', `${sender}：图片`, `超过每分钟 ${telegramState.maxPerMinute} 条任务`);
+              updateOneBotMessage(historyEntry.id, 'limited', `超过每分钟 ${effectiveOneBotRules(userId).maxPerMinute} 条任务`);
+              saveOneBotAdminStore();
+              addOneBotLog('limited', `${sender}：图片`, `超过每分钟 ${onebotState.maxPerMinute} 条任务`);
               recordRateLimit(userProfile);
-              await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
+              await onebotReply(message.chat?.id, onebotState.replyRateLimited, generation);
               continue;
             }
             const imageNode = { icon: { value: photoResult.directUrl, style: { justification: 1 }, type: 3 } };
             const captionNodes = printableCaption
-              ? telegramMessageNodes('', caption, message.caption_entities, captionCharacters.length > 0)
+              ? onebotMessageNodes('', caption, message.caption_entities, captionCharacters.length > 0)
               : [];
             enqueuePrintMessage({
               userId,
@@ -1893,15 +1661,15 @@ async function telegramLoop(generation) {
               printText: `${sender}：图片${printableCaption ? ` ${printableCaption}` : ''}`,
               textLength: captionLength,
               unsupportedCharacters: captionCharacters,
-              nodes: [...telegramTextNodes(sender), imageNode, ...captionNodes],
+              nodes: [...onebotTextNodes(sender), imageNode, ...captionNodes],
               continuationNodes: [imageNode, ...captionNodes],
             }, generation);
             photoEnqueued = true;
           } catch (error) {
-            updateTelegramMessage(historyEntry.id, 'failed', error.message || '图片处理失败');
-            saveTelegramAdminStore();
-            addTelegramLog('failed', `${sender} 的图片未打印`, error.message || '图片处理失败');
-            await telegramReply(message.chat?.id, telegramState.replyPrintFailed, generation);
+            updateOneBotMessage(historyEntry.id, 'failed', error.message || '图片处理失败');
+            saveOneBotAdminStore();
+            addOneBotLog('failed', `${sender} 的图片未打印`, error.message || '图片处理失败');
+            await onebotReply(message.chat?.id, onebotState.replyPrintFailed, generation);
           } finally {
             if (pausedPrintFlush && !photoEnqueued) schedulePrintFlush(generation);
           }
@@ -1909,29 +1677,29 @@ async function telegramLoop(generation) {
         }
         const unsupported = !printableMessageText || message.document || message.video || message.voice || message.animation || message.audio || message.contact || message.location || message.poll || message.video_note;
         if (unsupported) {
-          updateTelegramMessage(historyEntry.id, 'filtered', 'unsupported_message');
-          saveTelegramAdminStore();
-          const description = `${sender} 收到了${message.sticker ? ' sticker' : message.photo ? ' 图片' : ' 非文字'}消息，已跳过`;
-          addTelegramLog('filtered', description, 'unsupported_message');
-          await telegramReply(message.chat?.id, telegramState.replyUnsupported, generation);
+          updateOneBotMessage(historyEntry.id, 'filtered', 'unsupported_message');
+          saveOneBotAdminStore();
+          const description = `${sender} 收到了${message.photo ? ' 图片' : ' 非文字'}消息，已跳过`;
+          addOneBotLog('filtered', description, 'unsupported_message');
+          await onebotReply(message.chat?.id, onebotState.replyUnsupported, generation);
           continue;
         }
-        addTelegramLog('received', `${sender}：${printableMessageText}`);
-        const textLength = telegramTaskCharCount(printableMessageText);
+        addOneBotLog('received', `${sender}：${printableMessageText}`);
+        const textLength = onebotTaskCharCount(printableMessageText);
         if (!textTaskAllowed(userId, textLength)) {
-          updateTelegramMessage(historyEntry.id, 'limited', `单次打印文字超过 ${effectiveTelegramRules(userId).maxCharsPerTask} 字限制`);
-          saveTelegramAdminStore();
-          addTelegramLog('limited', `${sender}：${printableMessageText}`, `单次打印文字超过 ${telegramState.maxCharsPerTask} 字限制`);
-          await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
+          updateOneBotMessage(historyEntry.id, 'limited', `单次打印文字超过 ${effectiveOneBotRules(userId).maxCharsPerTask} 字限制`);
+          saveOneBotAdminStore();
+          addOneBotLog('limited', `${sender}：${printableMessageText}`, `单次打印文字超过 ${onebotState.maxCharsPerTask} 字限制`);
+          await onebotReply(message.chat?.id, onebotState.replyRateLimited, generation);
           continue;
         }
-        const alreadyQueuedForUser = telegramState.printQueue.some((item) => item.userId === userId);
+        const alreadyQueuedForUser = onebotState.printQueue.some((item) => item.userId === userId);
         if (!alreadyQueuedForUser && !userTaskAllowed(userId)) {
-          updateTelegramMessage(historyEntry.id, 'limited', `超过每分钟 ${effectiveTelegramRules(userId).maxPerMinute} 条任务`);
-          saveTelegramAdminStore();
-          addTelegramLog('limited', `${sender}：${printableMessageText}`, `超过每分钟 ${telegramState.maxPerMinute} 条任务`);
+          updateOneBotMessage(historyEntry.id, 'limited', `超过每分钟 ${effectiveOneBotRules(userId).maxPerMinute} 条任务`);
+          saveOneBotAdminStore();
+          addOneBotLog('limited', `${sender}：${printableMessageText}`, `超过每分钟 ${onebotState.maxPerMinute} 条任务`);
           recordRateLimit(userProfile);
-          await telegramReply(message.chat?.id, telegramState.replyRateLimited, generation);
+          await onebotReply(message.chat?.id, onebotState.replyRateLimited, generation);
           continue;
         }
         const printText = `${sender}：${printableMessageText}`;
@@ -1943,89 +1711,49 @@ async function telegramLoop(generation) {
           printText,
           textLength,
           unsupportedCharacters: unsupportedMessageCharacters,
-          nodes: telegramMessageNodes(sender, text, message.entities, unsupportedMessageCharacters.length > 0),
-          continuationNodes: telegramMessageNodes('', text, message.entities, unsupportedMessageCharacters.length > 0),
+          nodes: onebotMessageNodes(sender, text, message.entities, unsupportedMessageCharacters.length > 0),
+          continuationNodes: onebotMessageNodes('', text, message.entities, unsupportedMessageCharacters.length > 0),
         }, generation);
       }
     } catch (error) {
-      if (!telegramState.running || telegramState.generation !== generation) return;
-      telegramState.error = error.message;
-      telegramState.retryCount += 1;
-      if (telegramState.retryCount > 3) {
-        telegramState.running = false;
-        telegramState.generation += 1;
-        addTelegramLog('system', '监听已停止', `连续重试 3 次失败：${error.message}`);
+      if (!onebotState.running || onebotState.generation !== generation) return;
+      onebotState.error = error.message;
+      onebotState.retryCount += 1;
+      if (onebotState.retryCount > 3) {
+        onebotState.running = false;
+        onebotState.generation += 1;
+        closeOneBotClient();
+        addOneBotLog('system', '监听已停止', `连续重试 3 次失败：${error.message}`);
         return;
       }
-      addTelegramLog('system', `监听请求失败，${telegramState.retryCount}/3 次重试`, error.message);
+      addOneBotLog('system', `监听请求失败，${onebotState.retryCount}/3 次重试`, error.message);
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   }
 }
 
-async function telegramReply(chatId, text, generation) {
-  if (!chatId || !text || telegramState.generation !== generation || !telegramState.running) return;
+async function onebotReply(chatId, text, generation) {
+  if (!chatId || !text || onebotState.generation !== generation || !onebotState.running) return;
   try {
-    await telegramRequest(telegramState.apiBase, telegramState.token, 'sendMessage', { chat_id: chatId, text }, 15_000, telegramState.proxyUrl);
-    addTelegramLog('replied', `chat:${chatId}`, text);
+    await onebotRequest(onebotState.apiBase, onebotState.token, 'send_private_msg', { user_id: Number(chatId), message: [{ type: 'text', data: { text } }] }, 15000);
+    addOneBotLog('replied', `chat:${chatId}`, text);
   } catch (error) {
-    telegramState.error = error.message;
-    addTelegramLog('reply_failed', `chat:${chatId}`, error.message);
+    onebotState.error = error.message;
+    addOneBotLog('reply_failed', `chat:${chatId}`, error.message);
   }
 }
 
-const TELEGRAM_PUBLIC_COMMANDS = [
-  { command: 'start', description: '开始使用机器人' },
-  { command: 'whoami', description: '查看自己的 Telegram ID' },
-];
-const TELEGRAM_ADMIN_COMMANDS = [
-  ...TELEGRAM_PUBLIC_COMMANDS,
-  { command: 'help', description: '查看管理员帮助' },
-  { command: 'users', description: '查看用户列表' },
-  { command: 'user', description: '查看用户详情' },
-  { command: 'messages', description: '查看用户消息' },
-  { command: 'limits', description: '查看全局限流' },
-  { command: 'limit', description: '修改用户限流' },
-  { command: 'blacklist', description: '查看黑名单' },
-  { command: 'block', description: '封禁用户' },
-  { command: 'unblock', description: '解除用户封禁' },
-  { command: 'status', description: '查看机器人状态' },
-  { command: 'logs', description: '查看最近日志' },
-];
 
-async function registerTelegramCommands(apiBase, token, adminUserIds, proxyUrl) {
-  let registered = 0;
-  try {
-    await telegramRequest(apiBase, token, 'setMyCommands', { commands: TELEGRAM_PUBLIC_COMMANDS }, 10_000, proxyUrl);
-    registered += 1;
-  } catch (error) {
-    log('WARN', 'Telegram 公共命令菜单注册失败', error.message);
-  }
-  for (const userId of adminUserIds) {
-    try {
-      await telegramRequest(apiBase, token, 'setMyCommands', {
-        commands: TELEGRAM_ADMIN_COMMANDS,
-        scope: { type: 'chat', chat_id: userId },
-      }, 10_000, proxyUrl);
-      registered += 1;
-    } catch (error) {
-      log('WARN', `Telegram 管理员命令菜单注册失败（${userId}）`, error.message);
-    }
-  }
-  return registered;
-}
 
-async function startTelegram(req, res) {
+async function startOneBot(req, res) {
   const chunks = [];
   req.on('data', (chunk) => chunks.push(chunk));
   req.on('end', async () => {
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
       const accountType = normalizeAccountType(body.account_type, null);
-      if (!body.token || !body.sid || !body.device_sn || accountType === null || accountType === '') throw new Error('token、设备 SN、SID 和 account_type 都不能为空且 account_type 必须是数字');
-      const apiBase = normalizeTelegramApiBase(body.api_base);
-      const proxyUrl = body.proxy_enabled ? normalizeTelegramProxy(body.proxy_url) : '';
-      if (body.proxy_enabled && !proxyUrl) throw new Error('已开启 HTTP 代理，请填写代理地址');
+      if (!body.sid || !body.device_sn || accountType === null || accountType === '') throw new Error('设备 SN、SID 和 account_type 都不能为空且 account_type 必须是数字');
+      const apiBase = normalizeOneBotApiBase(body.api_base);
       const requestedLimit = Number(body.max_per_minute);
       const maxPerMinute = Number.isFinite(requestedLimit) ? Math.max(0, Math.min(100, Math.floor(requestedLimit))) : 2;
       const requestedChars = Number(body.max_chars_per_task);
@@ -2039,118 +1767,117 @@ async function startTelegram(req, res) {
       });
       const rateLimitBlacklistOnThird = body.rate_limit_blacklist_on_third === true;
       const requestedAdminUserIds = normalizeAdminUserIds(body.admin_user_ids);
-      await telegramRequest(apiBase, body.token.trim(), 'getMe', {}, 10000, proxyUrl);
-      telegramState.running = false;
-      telegramState.generation += 1;
-      if (telegramState.printFlushTimer) clearTimeout(telegramState.printFlushTimer);
-      telegramState.printFlushTimer = null;
-      telegramState.printQueue = [];
-      telegramState.token = body.token.trim();
-      telegramState.offset = 0;
-      telegramState.sid = body.sid.trim();
-      telegramState.deviceSn = body.device_sn.trim();
-      telegramState.accountType = accountType;
-      telegramState.apiBase = apiBase;
-      telegramState.proxyUrl = proxyUrl;
-      telegramState.maxPerMinute = maxPerMinute;
-      telegramState.maxCharsPerTask = maxCharsPerTask;
-      telegramState.rateLimitStrikeWindowMinutes = rateLimitStrikeWindowMinutes;
-      telegramState.rateLimitPenaltyMinutes = rateLimitPenaltyMinutes;
-      telegramState.rateLimitBlacklistOnThird = rateLimitBlacklistOnThird;
-      telegramState.stickerEnabled = body.sticker_enabled !== false;
-      telegramState.webmStickerEnabled = body.webm_sticker_enabled !== false;
-      telegramState.webmStickerFrame = ['first', 'second', 'penultimate', 'last'].includes(body.webm_sticker_frame) ? body.webm_sticker_frame : 'penultimate';
-      telegramState.photoEnabled = body.photo_enabled !== false;
-      telegramState.replyPrinting = normalizeReply(body.reply_printing, '正在打印，请稍候。');
-      telegramState.replyPrinted = normalizeReply(body.reply_printed, '已打印。');
-      telegramState.replyPrintFailed = normalizeReply(body.reply_print_failed, '打印失败，请稍后重试。');
-      telegramState.replyUnsupported = normalizeReply(body.reply_unsupported, '该消息类型不支持打印，请发送文字。');
-      telegramState.replyRateLimited = normalizeReply(body.reply_rate_limited, '操作太频繁，请稍后再试。');
+      onebotState.running = false;
+      onebotState.generation += 1;
+      closeOneBotClient();
+      const login = await onebotRequest(apiBase, String(body.token || '').trim(), 'get_login_info', {}, 10000);
+      if (!login?.user_id) throw new Error('OneBot 未返回登录 QQ，请确认 NapCat 已登录');
+      onebotState.running = false;
+      onebotState.generation += 1;
+      if (onebotState.printFlushTimer) clearTimeout(onebotState.printFlushTimer);
+      onebotState.printFlushTimer = null;
+      onebotState.printQueue = [];
+      onebotState.token = String(body.token || '').trim();
+      onebotState.offset = 0;
+      onebotState.sid = body.sid.trim();
+      onebotState.deviceSn = body.device_sn.trim();
+      onebotState.accountType = accountType;
+      onebotState.apiBase = apiBase;
+      onebotState.maxPerMinute = maxPerMinute;
+      onebotState.maxCharsPerTask = maxCharsPerTask;
+      onebotState.rateLimitStrikeWindowMinutes = rateLimitStrikeWindowMinutes;
+      onebotState.rateLimitPenaltyMinutes = rateLimitPenaltyMinutes;
+      onebotState.rateLimitBlacklistOnThird = rateLimitBlacklistOnThird;
+      onebotState.photoEnabled = body.photo_enabled !== false;
+      onebotState.replyPrinting = normalizeReply(body.reply_printing, '正在打印，请稍候。');
+      onebotState.replyPrinted = normalizeReply(body.reply_printed, '已打印。');
+      onebotState.replyPrintFailed = normalizeReply(body.reply_print_failed, '打印失败，请稍后重试。');
+      onebotState.replyUnsupported = normalizeReply(body.reply_unsupported, '该消息类型不支持打印，请发送文字。');
+      onebotState.replyRateLimited = normalizeReply(body.reply_rate_limited, '操作太频繁，请稍后再试。');
       applyImageHostSettings(body.image_host || {});
       const hasRequestedAdminIds = Object.prototype.hasOwnProperty.call(body, 'admin_user_ids');
-      telegramState.adminUserIds = new Set(hasRequestedAdminIds
+      onebotState.adminUserIds = new Set(hasRequestedAdminIds
         ? [...ENV_ADMIN_USER_IDS, ...requestedAdminUserIds]
-        : [...telegramAdminStore.adminUserIds, ...appConfig.telegram.adminUserIds, ...ENV_ADMIN_USER_IDS]);
-      saveTelegramAdminStore();
-      const commandMenusRegistered = await registerTelegramCommands(apiBase, telegramState.token, [...telegramState.adminUserIds], proxyUrl);
-      telegramState.userTasks = new Map();
-      telegramState.rateLimitStrikes = new Map();
-      telegramState.blacklist = new Map(Object.entries(telegramAdminStore.blacklist));
-      telegramState.messageById = new Map(telegramState.messages.map((item) => [item.id, item]));
-      telegramState.logs = [];
-      runScheduledCacheCleanup(telegramState.imageHost).catch((error) => { imageHostCleanupState.lastError = error.message; });
+        : [...onebotAdminStore.adminUserIds, ...appConfig.onebot.adminUserIds, ...ENV_ADMIN_USER_IDS]);
+      saveOneBotAdminStore();
+      onebotState.userTasks = new Map();
+      onebotState.rateLimitStrikes = new Map();
+      onebotState.blacklist = new Map(Object.entries(onebotAdminStore.blacklist));
+      onebotState.messageById = new Map(onebotState.messages.map((item) => [item.id, item]));
+      onebotState.logs = [];
+      runScheduledCacheCleanup(onebotState.imageHost).catch((error) => { imageHostCleanupState.lastError = error.message; });
       const taskLimitText = maxPerMinute === 0 ? '单个用户不限制打印任务数量' : `每位用户每分钟最多 ${maxPerMinute} 条任务`;
       const charLimitText = maxCharsPerTask === 0 ? '单次打印文字不限制字数' : `单次打印文字最多 ${maxCharsPerTask} 字`;
       const penaltyText = rateLimitBlacklistOnThird ? `封控窗口 ${rateLimitStrikeWindowMinutes} 分钟，惩罚 ${rateLimitPenaltyMinutes.join('/')} 分钟后第 3 次永久拉黑` : `封控窗口 ${rateLimitStrikeWindowMinutes} 分钟，惩罚 ${rateLimitPenaltyMinutes.join('/')} 分钟`;
-      addTelegramLog('system', `监听已启动，${taskLimitText}，${charLimitText}，${penaltyText}`, `已注册 ${commandMenusRegistered} 组 Telegram 命令菜单`);
-      telegramState.lastMessage = '';
-      telegramState.error = '';
-      telegramState.retryCount = 0;
-      telegramState.running = true;
-      telegramLoop(telegramState.generation);
-      log('INFO', 'Telegram 监听请求已接受');
+      addOneBotLog('system', `监听已启动，${taskLimitText}，${charLimitText}，${penaltyText}`, '已连接 OneBot v11 正向 WebSocket；仅处理 QQ 私聊');
+      onebotState.lastMessage = '';
+      onebotState.error = '';
+      onebotState.retryCount = 0;
+      onebotState.running = true;
+      onebotLoop(onebotState.generation);
+      log('INFO', 'OneBot 监听请求已接受');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ running: true }));
     } catch (error) {
-      log('ERROR', 'Telegram 监听启动失败', error.message);
+      closeOneBotClient();
+      onebotState.running = false;
+      log('ERROR', 'OneBot 监听启动失败', error.message);
       res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: error.message }));
     }
   });
 }
 
-function stopTelegram(res) {
-  telegramState.running = false;
-  telegramState.generation += 1;
-  telegramState.token = '';
-  telegramState.error = '';
-  telegramState.retryCount = 0;
-  if (telegramState.printFlushTimer) clearTimeout(telegramState.printFlushTimer);
-  telegramState.printFlushTimer = null;
-  telegramState.printQueue = [];
-  log('INFO', 'Telegram 监听已停止');
+function stopOneBot(res) {
+  closeOneBotClient();
+  onebotState.running = false;
+  onebotState.generation += 1;
+  onebotState.token = '';
+  onebotState.error = '';
+  onebotState.retryCount = 0;
+  if (onebotState.printFlushTimer) clearTimeout(onebotState.printFlushTimer);
+  onebotState.printFlushTimer = null;
+  onebotState.printQueue = [];
+  log('INFO', 'OneBot 监听已停止');
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ running: false }));
 }
 
-function telegramStatus(res) {
+function onebotStatus(res) {
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({
-    running: telegramState.running,
-    lastMessage: telegramState.lastMessage,
-    error: telegramState.error,
-    retryCount: telegramState.retryCount,
-    logs: telegramState.logs,
-    userCount: telegramState.users.size,
-    messageCount: telegramState.messages.length,
-    queueCount: telegramState.printQueue.length,
-    maxPerMinute: telegramState.maxPerMinute,
-    maxCharsPerTask: telegramState.maxCharsPerTask,
-    rateLimitStrikeWindowMinutes: telegramState.rateLimitStrikeWindowMinutes,
-    rateLimitPenaltyMinutes: telegramState.rateLimitPenaltyMinutes,
-    rateLimitBlacklistOnThird: telegramState.rateLimitBlacklistOnThird,
+    running: onebotState.running,
+    lastMessage: onebotState.lastMessage,
+    error: onebotState.error,
+    retryCount: onebotState.retryCount,
+    logs: onebotState.logs,
+    userCount: onebotState.users.size,
+    messageCount: onebotState.messages.length,
+    queueCount: onebotState.printQueue.length,
+    maxPerMinute: onebotState.maxPerMinute,
+    maxCharsPerTask: onebotState.maxCharsPerTask,
+    rateLimitStrikeWindowMinutes: onebotState.rateLimitStrikeWindowMinutes,
+    rateLimitPenaltyMinutes: onebotState.rateLimitPenaltyMinutes,
+    rateLimitBlacklistOnThird: onebotState.rateLimitBlacklistOnThird,
     blacklist: blacklistEntries(),
-    stickerEnabled: telegramState.stickerEnabled,
-    webmStickerEnabled: telegramState.webmStickerEnabled,
-    webmStickerFrame: telegramState.webmStickerFrame,
-    photoEnabled: telegramState.photoEnabled,
+    photoEnabled: onebotState.photoEnabled,
     imageHost: {
-      provider: telegramState.imageHost.provider,
-      cacheExpireDays: telegramState.imageHost.cacheExpireDays,
-      deleteExpiredCache: telegramState.imageHost.deleteExpiredCache,
+      provider: onebotState.imageHost.provider,
+      cacheExpireDays: onebotState.imageHost.cacheExpireDays,
+      deleteExpiredCache: onebotState.imageHost.deleteExpiredCache,
       cleanup: imageHostCleanupStatus(),
     },
   }));
 }
 
-function telegramBlacklist(res) {
+function onebotBlacklist(res) {
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify({ blacklist: blacklistEntries() }));
 }
 
-function removeTelegramBlacklist(req, res, requestUrl) {
+function removeOneBotBlacklist(req, res, requestUrl) {
   let userId;
-  try { userId = decodeURIComponent(requestUrl.pathname.slice('/api/telegram/blacklist/'.length)); } catch {
+  try { userId = decodeURIComponent(requestUrl.pathname.slice('/api/onebot/blacklist/'.length)); } catch {
     res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'invalid userId' }));
     return;
@@ -2161,14 +1888,14 @@ function removeTelegramBlacklist(req, res, requestUrl) {
     return;
   }
   removeBlacklistEntry(userId);
-  telegramState.rateLimitStrikes.delete(String(userId));
-  addTelegramLog('system', `已解除用户 ${userId} 的封控`, 'blacklist_removed');
+  onebotState.rateLimitStrikes.delete(String(userId));
+  addOneBotLog('system', `已解除用户 ${userId} 的封控`, 'blacklist_removed');
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ removed: true, blacklist: blacklistEntries() }));
 }
 
-function clearTelegramLogs(res) {
-  telegramState.logs = [];
+function clearOneBotLogs(res) {
+  onebotState.logs = [];
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ cleared: true }));
 }
@@ -2225,12 +1952,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && requestUrl.pathname === '/api/config') return updateAppConfig(req, res);
   if (req.method === 'DELETE' && requestUrl.pathname === '/api/config') return deleteAppConfig(res);
   if (req.method === 'POST' && requestUrl.pathname === '/api/settings/image-host') return setImageHostSettings(req, res);
-  if (req.method === 'POST' && requestUrl.pathname === '/api/telegram/start') return startTelegram(req, res);
-  if (req.method === 'POST' && requestUrl.pathname === '/api/telegram/stop') return stopTelegram(res);
-  if (req.method === 'POST' && requestUrl.pathname === '/api/telegram/logs/clear') return clearTelegramLogs(res);
-  if (req.method === 'GET' && requestUrl.pathname === '/api/telegram/status') return telegramStatus(res);
-  if (req.method === 'GET' && requestUrl.pathname === '/api/telegram/blacklist') return telegramBlacklist(res);
-  if (req.method === 'DELETE' && requestUrl.pathname.startsWith('/api/telegram/blacklist/')) return removeTelegramBlacklist(req, res, requestUrl);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/onebot/start') return startOneBot(req, res);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/onebot/stop') return stopOneBot(res);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/onebot/logs/clear') return clearOneBotLogs(res);
+  if (req.method === 'GET' && requestUrl.pathname === '/api/onebot/status') return onebotStatus(res);
+  if (req.method === 'GET' && requestUrl.pathname === '/api/onebot/blacklist') return onebotBlacklist(res);
+  if (req.method === 'DELETE' && requestUrl.pathname.startsWith('/api/onebot/blacklist/')) return removeOneBotBlacklist(req, res, requestUrl);
   if (req.method === 'GET' && requestUrl.pathname === '/api/image') {
     proxyImage(res, requestUrl);
     return;
@@ -2241,7 +1968,8 @@ const server = http.createServer((req, res) => {
     return;
   }
   const requestedPath = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname;
-  if (requestedPath === '/config.json') {
+  if (['/config.json', '/.onebot-admin.json', '/.onebot-media-cache.json'].includes(requestedPath)
+      || requestedPath.startsWith('/.git/')) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');
     return;
@@ -2269,9 +1997,10 @@ server.on('error', (error) => {
 });
 
 function shutdown(signal) {
-  telegramState.running = false;
-  telegramState.generation += 1;
-  telegramState.token = '';
+  closeOneBotClient();
+  onebotState.running = false;
+  onebotState.generation += 1;
+  onebotState.token = '';
   server.close(() => {
     log('INFO', `${signal}: local app stopped`);
     process.exit(0);

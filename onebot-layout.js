@@ -1,11 +1,11 @@
 // ponytail: conservative 100-byte QR cap; raise only after this printer accepts larger values.
-const TELEGRAM_QR_MAX_BYTES = 100;
+const ONEBOT_QR_MAX_BYTES = 100;
 
-function telegramQrAllowed(value) {
-  return Buffer.byteLength(String(value ?? ''), 'utf8') <= TELEGRAM_QR_MAX_BYTES;
+function onebotQrAllowed(value) {
+  return Buffer.byteLength(String(value ?? ''), 'utf8') <= ONEBOT_QR_MAX_BYTES;
 }
 
-function telegramPrintNodes(items, separatorNodes = []) {
+function onebotPrintNodes(items, separatorNodes = []) {
   return items.flatMap((item, index) => {
     const previous = items[index - 1];
     const followsMatchingMedia = previous
@@ -17,7 +17,7 @@ function telegramPrintNodes(items, separatorNodes = []) {
   });
 }
 
-function telegramContentNodes(lines, options = {}) {
+function onebotContentNodes(lines, options = {}) {
   const height = Number(options.height) === 1 ? 1 : 0;
   const width = Number(options.width) === 1 ? 1 : 0;
   return lines.map((line) => ({
@@ -30,4 +30,4 @@ function telegramContentNodes(lines, options = {}) {
   }));
 }
 
-module.exports = { telegramPrintNodes, telegramContentNodes, telegramQrAllowed };
+module.exports = { onebotPrintNodes, onebotContentNodes, onebotQrAllowed };
