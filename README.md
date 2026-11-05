@@ -4,13 +4,16 @@
 
 本项目基于 [lemonno2333/WeChat-Printer](https://github.com/lemonno2333/WeChat-Printer)，保留原有小票编辑、图片处理和图床功能，将消息接入改为 **OneBot v11 正向 WebSocket**。适用于本地运行的 NapCat、LLOneBot 等 QQ / OneBot 服务。
 
-**[下载 Windows 免安装版](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/onebot-v1.0.0)** · **[SID 获取工具](https://github.com/qazedc-abcd/WeChat-SID-Tool)** · **[配置示例](config.example.json)**
+**[下载 Windows 免安装版 v1.1.0](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/onebot-v1.1.0)** · **[R2 / S3 教程](docs/R2-S3-SETUP.md)** · **[Markdown 使用说明](docs/MARKDOWN.md)** · **[SID 获取工具](https://github.com/qazedc-abcd/WeChat-SID-Tool)**
 
 ## 能做什么
 
 - **手动打印**：编辑文字、放大文字、空行、二维码、图片和表格，实时预览，也支持直接编辑请求 JSON。
 - **QQ 消息打印**：接收私聊文字和图片，显示发送者昵称，按消息段顺序排版，合并连续消息。
 - **图片处理**：本地图片可裁剪、缩放和调整对比度；QQ 图片经白底缩放、黑白抖动处理后上传图床，再交给小票机打印。
+- **自定义图床**：支持 Cloudflare R2、S3 兼容 API、自定义 HTTP 上传接口，也保留 Imgchr / CloudFlare ImgBed；提供上传测试与配置教程。
+- **拖拽与粘贴**：批量拖入图片后依次裁剪并自动上传，失败可重试；可复制 Markdown 图片链接。
+- **Markdown**：手动输入与 QQ 文字自动识别，实时本地检查、预览，支持导入文档；可切换为原文打印。可选 AI 检查支持 OpenAI 兼容接口，默认关闭，建议需手动应用。
 - **打印管理**：设置单用户打印频率、单任务字数、回复文案、黑名单和管理员指令。
 - **本地运行**：默认只监听 `127.0.0.1`，配置可保存在浏览器或本地文件。
 
@@ -25,7 +28,7 @@
 | QQ 接入 | 已登录 QQ 的 OneBot v11 服务，启用正向 WebSocket 的 API + 事件接口 |
 | 浏览器 | 现代浏览器 |
 | 源码运行 | Node.js **22 或更高版本**；Windows 免安装包已自带 Node.js |
-| QQ 图片打印 | FFmpeg，以及可用的 Imgchr / CloudFlare ImgBed 图床 |
+| QQ / Markdown 远程图片处理 | FFmpeg，以及可用的公开图床或 R2 / S3 存储 |
 
 可以先用文字验证打印链路，再配置图片。SID 有有效期，失效后需要重新获取。
 
@@ -35,7 +38,7 @@
 
 **Windows 免安装版**
 
-1. 在 [Release](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/onebot-v1.0.0) 下载 `WeChat-Printer-OneBot11-windows-x64-v1.0.0.zip`。
+1. 在 [Release](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/onebot-v1.1.0) 下载 `WeChat-Printer-OneBot11-windows-x64-v1.1.0.zip`。
 2. 完整解压，双击根目录的 `start-local.bat`。不要直接在压缩包内运行。
 3. 浏览器会打开 **<http://127.0.0.1:4180>**，使用期间保留服务窗口。
 
@@ -49,7 +52,9 @@ cd WeChat-Printer
 node start-local.js
 ```
 
-项目仅使用 Node.js 内置模块，无需安装 npm 依赖。只启动服务可执行 `node server.js`；按 `Ctrl+C` 结束服务。
+项目无需安装运行时 npm 依赖，Markdown、图标和二维码浏览器脚本已随源码附带。只启动服务可执行 `node server.js`；按 `Ctrl+C` 结束服务。
+
+升级时先停止旧服务，在新目录解压新版，按需复制旧 `app` 目录中的 `config.json`、`.onebot-admin.json` 和 `.onebot-media-cache.json`。浏览器配置由同一浏览器与地址继续使用；更换端口会变成另一个存储位置。启动新版本并刷新页面，避免新旧服务占用同一端口。
 
 ### 2. 配置小票机
 
@@ -109,12 +114,22 @@ node start-local.js
 QQ 图片会优先使用 OneBot 上报的 HTTP(S) 地址；需要时通过 `get_image` 查询图片位置。工具将图片缩放到 **280 × 280** 的白底画布，并使用 Floyd–Steinberg 抖动转成黑白图，再上传到所选图床。
 
 1. 安装 FFmpeg，并让 `ffmpeg` 命令可用；也可用 `WECHAT_PRINTER_FFMPEG` 环境变量指定完整路径。
-2. 在“图床设置”选择 Imgchr，或填写自己的 CloudFlare ImgBed 地址及所需凭据。
+2. 在“图床设置”选择 R2 / S3、自定义 HTTP 图床、Imgchr 或 CloudFlare ImgBed，填写相应配置。
 3. 确认图床可用后，在“消息监听”中开启图片打印。
 
 **Windows 免安装包未包含 FFmpeg。** 图片处理失败时，先检查 FFmpeg 和图床；文字打印不依赖 FFmpeg。
 
 CloudFlare ImgBed 支持上传渠道、缓存天数和过期图片清理。其渠道列表中的 Telegram 是图床的存储渠道，不是 Telegram 消息监听。
+
+**[Cloudflare R2 / S3 逐步配置教程](docs/R2-S3-SETUP.md)** 包含创建桶、生成对象读写凭据、公开域名、Region、寻址方式和错误排查。“上传测试图片”不会打印；上传后请点击返回的直链确认能公开下载。R2 / S3 的远程对象由存储服务生命周期管理，本工具不自动删除。
+
+## Markdown 与 AI 检查
+
+在文字节点输入 Markdown 会自动识别；可点击“保留原文”或“打开检查器”。也可以新建 Markdown 节点，导入或拖入文档。标题、列表、引用、代码、表格和图片会转换为小票节点。
+
+检查器把格式建议与打印限制分开显示：缺少空格、未闭合标记等给出提示，非公开图片地址和超过 16 列的表格需要调整。Markdown 允许许多写法作为普通文字解析，本地检查不会把所有提示都当成语法错误。
+
+AI 默认关闭。需要时在设置中填写兼容 OpenAI 的基础地址、模型和 Key，在 Markdown 节点手动点击“AI 检查”。保存配置、自动识别与 QQ 接收不会调用模型；只有当前节点正文被发送。建议全文可预览，手动点击才会应用。[完整说明](docs/MARKDOWN.md)
 
 ## 限流、回复与管理员
 
@@ -141,7 +156,7 @@ CloudFlare ImgBed 支持上传渠道、缓存天数和过期图片清理。其�
 
 | 文件 | 内容 |
 | --- | --- |
-| `config.json` | 设备参数、OneBot 令牌和图床设置 |
+| `config.json` | 设备参数、OneBot 令牌、图床与可选 AI 设置 |
 | `.onebot-admin.json` | QQ 用户、消息预览、限流、黑名单和管理审计 |
 | `.onebot-media-cache.json` | 已处理 QQ 图片的图床缓存 |
 
@@ -181,13 +196,19 @@ node start-local.js
 源码运行需要 Node.js 22+。在项目根目录执行全部测试：
 
 ```powershell
-Get-ChildItem *.test.js | ForEach-Object {
-    node $_.FullName
-    if ($LASTEXITCODE -ne 0) { throw $_.Name }
-}
+node --test
 ```
 
-测试覆盖文本兼容性、SID 错误识别、管理员规则、票面排版，以及 OneBot 的 RPC、访问令牌、CQ 码、消息顺序、去重、超时、重连和停止行为。端到端测试使用本地模拟 OneBot 与打印接口，不会向真实联系人发送消息或调用真实打印机。
+测试覆盖文本兼容性、SID 错误识别、管理员规则、票面排版、OneBot 接入，以及 S3 签名上传、自定义 HTTP 图床、Markdown 和 AI 兼容接口。集成测试使用本地模拟 OneBot、图床、AI 与打印接口，不会向真实联系人发送消息或调用真实打印机。设置 `WECHAT_PRINTER_FFMPEG` 后，集成测试也会验证远程图片的实际编码与缓存。
+
+可选的页面交互验证需要开发依赖（不影响直接运行工具）：
+
+```sh
+npm ci
+npm run test:ui
+```
+
+它使用 jsdom 检查配置保存、Markdown 切换、AI 建议确认、批量拖拽裁剪与上传，不操作浏览器或打印机。
 
 Windows x64 打包使用 PowerShell 7 和官方 x64 Node.js 22+：
 
@@ -197,7 +218,7 @@ pwsh -File .\build-windows.ps1
 
 产物位于 `dist`，包含免安装包、源码包和 SHA-256 校验文件。重复构建需使用新的输出目录，例如 `-Output .\dist-new`。
 
-本机已完成 NapCat 只读登录状态检查、模拟打印和免安装包启动验证。**QQ 图片经 FFmpeg、图床到实物小票机的完整链路尚未实测。** 实现与验证细节见 [ONEBOT_TECHNICAL_HANDOFF.md](ONEBOT_TECHNICAL_HANDOFF.md)，协议参考 [OneBot 11 标准](https://github.com/botuniverse/onebot-11)。
+本机已完成模拟接口、FFmpeg 处理、DOM 交互和免安装包启动验证。**R2 / S3、AI 提供商的真实账号连通性与新版实物打印链路尚未验证。** 实现说明见 [v1.1 技术说明](docs/TECHNICAL-NOTES-v1.1.md) 和 [OneBot 技术交接](ONEBOT_TECHNICAL_HANDOFF.md)，协议参考 [OneBot 11 标准](https://github.com/botuniverse/onebot-11)。
 
 ## 致谢与许可
 

@@ -7,7 +7,7 @@ $nodeMajor = [int](& $nodeExe -p 'process.versions.node.split(".")[0]')
 if ($nodeArch -ne 'x64' -or $nodeMajor -lt 22) { throw 'An x64 Node.js 22+ runtime is required.' }
 $commit = (& git -C $PSScriptRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Build from a Git checkout.' }
-$packageName = 'WeChat-Printer-OneBot11-windows-x64-v1.0.0'
+$packageName = 'WeChat-Printer-OneBot11-windows-x64-v1.1.0'
 $package = Join-Path $Output $packageName
 if (Test-Path -LiteralPath $package) { throw "Output already exists: $package. Choose a fresh Output directory." }
 $app = New-Item -ItemType Directory -Path (Join-Path $package 'app') -Force
@@ -53,6 +53,10 @@ WeChat Printer — OneBot v11 / QQ 免安装版
 群聊、机器人自己发送的消息和心跳不会打印。
 
 图片处理需另外安装 FFmpeg，或设置 WECHAT_PRINTER_FFMPEG 为其完整路径。本包未含 FFmpeg。
+本地图片可拖拽或粘贴，裁剪完成后自动上传；图床支持 R2、S3 兼容服务与自定义 HTTP 接口。
+R2 / S3 逐步教程见 app\docs\R2-S3-SETUP.md。
+Markdown 自动识别与本地检查无需 AI；可选 AI 检查使用兼容 OpenAI 的接口，需手动点击并应用建议。
+Markdown 使用说明见 app\docs\MARKDOWN.md。
 源码和完整使用说明在 app 目录；本地配置与消息管理文件也保存在 app 目录。
 默认浏览器配置只保存在当前浏览器。切换本地保存后将写入 app\config.json。
 SID 会过期，失效后重新获取。本包不含任何真实设备、QQ 配置、令牌或聊天记录。
@@ -61,15 +65,15 @@ SID 会过期，失效后重新获取。本包不含任何真实设备、QQ 配�
 若原 4173 端口的版本仍在运行，本版默认使用独立的 4180 端口。
 
 MIT License；原项目 https://github.com/lemonno2333/WeChat-Printer
-本分支 https://github.com/qazedc-abcd/WeChat-Printer/tree/feature/onebot11
+本仓库 https://github.com/qazedc-abcd/WeChat-Printer
 构建提交 $commit
 "@ | Set-Content -LiteralPath (Join-Path $package '使用说明.txt') -Encoding utf8BOM
 @{
     name = 'WeChat Printer OneBot11'
-    version = 'onebot-v1.0.0'
+    version = 'onebot-v1.1.0'
     commit = $commit
     sourceRepository = 'https://github.com/qazedc-abcd/WeChat-Printer'
-    sourceBranch = 'feature/onebot11'
+    sourceBranch = 'main'
     upstreamRepository = 'https://github.com/lemonno2333/WeChat-Printer'
     platform = 'windows-x64'
     nodeVersion = $nodeVersion
@@ -80,7 +84,7 @@ MIT License；原项目 https://github.com/lemonno2333/WeChat-Printer
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $package 'build-info.json') -Encoding utf8NoBOM
 $archive = Join-Path $Output "$packageName.zip"
 Compress-Archive -LiteralPath $package -DestinationPath $archive -CompressionLevel Optimal
-$sourceArchive = Join-Path $Output 'WeChat-Printer-OneBot11-source-v1.0.0.zip'
+$sourceArchive = Join-Path $Output 'WeChat-Printer-OneBot11-source-v1.1.0.zip'
 & git -C $PSScriptRoot archive --format=zip --prefix=WeChat-Printer-OneBot11/ --output=$sourceArchive HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Source ZIP creation failed.' }
 $hashes = foreach ($archivePath in @($archive, $sourceArchive)) {

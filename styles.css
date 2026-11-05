@@ -452,3 +452,46 @@ input[type="range"]:focus { background: transparent; box-shadow: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+:root { --focus-ring: 0 0 0 3px rgba(38, 99, 210, .18); }
+.composer-shortcuts, .md-toolbar, .image-extra-actions, .settings-test-row, .text-markdown-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.composer-shortcuts .table-action-button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
+.file-picker-label { cursor: pointer; }
+.image-drop-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 130px; padding: 22px; border: 1.5px dashed #bacce4; border-radius: 14px; background: #f4f8ff; color: #35567d; text-align: center; cursor: pointer; transition: background .15s, border-color .15s; }
+.image-drop-zone > svg { width: 25px; height: 25px; }
+.image-drop-zone > span { font-size: 12px; line-height: 1.6; color: #68809c; }
+.image-drop-zone:hover, .image-drop-zone.drag-active, .image-drop-target.drag-active { border-color: #2863bd; background: #e8f0ff; }
+.image-drop-zone:focus-visible, .markdown-source:focus-visible, .table-action-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.provider-fields { margin: 18px 0; padding: 18px 0 4px; border-top: 1px solid #dfe7f1; }
+.advanced-settings { padding: 12px 0; color: #526a84; font-size: 13px; }
+.advanced-settings summary { cursor: pointer; margin-bottom: 12px; }
+.advanced-settings .switch-label { margin-bottom: 12px; }
+.settings-test-row > span { flex: 1; min-width: 150px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.settings-test-row a { color: #245ca3; text-decoration: underline; }
+.ai-settings-panel { margin-top: 24px; }
+.ai-settings-panel form > .switch-label { padding: 8px 0; font-size: 14px; }
+.ai-settings-panel .settings-two-column { margin-top: 16px; }
+.markdown-source { width: 100%; min-height: 180px; max-height: 600px; padding: 14px; resize: vertical; font: 13px/1.65 Consolas, 'Microsoft YaHei UI', monospace; tab-size: 4; }
+.markdown-item { border-color: #b9ccec; }
+.md-toolbar > span { margin-left: auto; color: #77889c; font-size: 11px; }
+.md-check-summary { padding: 10px 12px; border-radius: 9px; background: #edf5ff; color: #355a83; font-size: 12px; line-height: 1.6; }
+.md-check-summary.invalid { background: #fff0ed; color: #9a4635; }
+.md-issues { list-style: none; padding: 0; margin: 10px 0 0; max-height: 190px; overflow: auto; }
+.md-issue { border-left: 3px solid #d0a650; padding: 7px 10px; margin: 7px 0; font-size: 12px; line-height: 1.65; background: #fcf9f1; }
+.md-issue.error { border-color: #be6254; background: #fff4f1; }
+.md-issue.info { border-color: #8ba9c8; background: #f3f7fc; }
+.md-issue small { display: block; color: #6b7787; }
+.markdown-ai-result { font-size: 12px; line-height: 1.7; color: #47627f; overflow-wrap: anywhere; }
+.markdown-ai-result p { margin: 8px 0; }
+.markdown-ai-result pre { white-space: pre-wrap; max-height: 240px; overflow: auto; background: #f4f6fa; padding: 12px; border-radius: 8px; }
+.text-markdown-hint { font-size: 12px; line-height: 1.6; color: #4a6f98; }
+.text-markdown-hint:empty { display: none; }
+.text-markdown-hint .table-action-button, .md-toolbar .table-action-button, .image-extra-actions .table-action-button { min-height: 30px; padding: 6px 9px; font-size: 12px; }
+.markdown-receipt { font-family: 'Roboto Condensed', 'Microsoft YaHei', monospace; font-size: 12px; line-height: 1.5; color: #111; }
+.md-receipt-row { display: grid; min-height: 1.5em; }
+.md-receipt-row > span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-receipt-row.font-height-1 { line-height: 2; font-weight: 700; }
+.md-receipt-row.font-width-1 { font-size: 1.65em; }
+.md-image { text-align: center; padding: 8px 0; }
+.md-image img { max-width: 100%; height: auto; }
+#appVersion { opacity: .65; font-size: 10px; margin-left: 6px; }
+@media (max-width: 640px) { .image-drop-zone { min-height: 110px; padding: 16px; } .md-toolbar > span { width: 100%; margin-left: 0; } .composer-shortcuts { gap: 7px; } .markdown-source { font-size: 14px; } }

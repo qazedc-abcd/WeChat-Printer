@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const { spawn } = require('child_process');
+const { createHash } = require('node:crypto');
+const { uploadExtended } = require('./upload-provider');
+const { normalizeImageHost, validateImageHost } = require('./image-host-settings');
+const { normalizeAi, checkWithAi } = require('./ai-markdown');
+const Markdown = require('./markdown-engine');
 const { OneBotClient, normalizeOneBotUrl } = require('./onebot-client');
 let onebotClient = null;
 const { printableText, unsupportedCharacters } = require('./printable-text');
@@ -58,13 +63,14 @@ const DEFAULT_APP_CONFIG = {
     maxPerMinute: 2, maxCharsPerTask: 0,
     rateLimitStrikeWindowMinutes: 1, rateLimitPenaltyMinutes: [2, 10, 1440], rateLimitBlacklistOnThird: false,
     blacklist: [],
-    photoEnabled: true,
+    photoEnabled: true, markdownEnabled: true,
     reply_printing: '正在打印，请稍候。', reply_printed: '已打印。',
     reply_print_failed: '打印失败，请稍后重试。', reply_unsupported: '该消息类型不支持打印，请发送文字。',
     reply_rate_limited: '操作太频繁，请稍后再试。',
     adminUserIds: [],
   },
   imageHost: { provider: DEFAULT_IMAGE_HOST, cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false },
+  ai: normalizeAi(),
 };
 
 function normalizeAccountType(value, fallback = 2) {
@@ -106,8 +112,10 @@ function mergeConfig(raw = {}) {
         reason: String(item.reason || '多次触发频率限制'), strikes: Number(item.strikes) || 0, createdAt: Number(item.createdAt) || Date.now(),
       })) : [],
       photoEnabled: onebot.photoEnabled !== false,
+      markdownEnabled: onebot.markdownEnabled !== false,
     },
     imageHost: imageHostConfig(source.imageHost || {}),
+    ai: normalizeAi(source.ai || {}),
   };
 }
 
@@ -126,9 +134,11 @@ function saveAppConfig(value) {
 function clearAppConfig() {
   try { fs.unlinkSync(CONFIG_FILE); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   appConfig = mergeConfig();
+  aiRuntime = normalizeAi(appConfig.ai);
 }
 
 let appConfig = loadAppConfig();
+let aiRuntime = normalizeAi(appConfig.ai);
 
 function loadOneBotAdminStore() {
   try {
@@ -193,6 +203,10 @@ function mediaCacheKey(media, variant = 'default', kind = 'photo') {
 
 function imageHostCacheScope(config) {
   const settings = imageHostConfig(config);
+  if (['r2', 's3', 'custom'].includes(settings.provider)) {
+    const scope = { provider: settings.provider, endpoint: settings.endpoint, bucket: settings.bucket, prefix: settings.prefix, publicBaseUrl: settings.publicBaseUrl, uploadUrl: settings.uploadUrl, fileField: settings.fileField, responseUrlPath: settings.responseUrlPath, identity: createHash('sha256').update(settings.accessKeyId || settings.authorization || '').digest('hex') };
+    return `${settings.provider}:${createHash('sha256').update(JSON.stringify(scope)).digest('hex')}`;
+  }
   return settings.provider === 'cfbed' ? `cfbed:${settings.baseUrl}` : DEFAULT_IMAGE_HOST;
 }
 
@@ -479,6 +493,7 @@ const onebotState = {
   rateLimitPenaltyMinutes: [2, 10, 1440],
   rateLimitBlacklistOnThird: false,
   photoEnabled: true,
+  markdownEnabled: true,
   replyPrinting: '正在打印，请稍候。',
   replyPrinted: '已打印。',
   replyPrintFailed: '打印失败，请稍后重试。',
@@ -622,6 +637,7 @@ function normalizeCacheExpireDays(value) {
 }
 
 function imageHostConfig(value = {}) {
+  if (['r2', 's3', 'custom'].includes(value.provider)) return normalizeImageHost(value);
   const provider = value.provider === 'cfbed' ? 'cfbed' : DEFAULT_IMAGE_HOST;
   if (provider === DEFAULT_IMAGE_HOST) return { provider, cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false };
   const baseUrl = normalizeImageHostBase(value.baseUrl);
@@ -674,12 +690,13 @@ async function uploadToCfBed(dataUrl, config) {
 
 async function uploadHostedImage(dataUrl, config = {}) {
   const settings = imageHostConfig(config);
+  if (['r2', 's3', 'custom'].includes(settings.provider)) return uploadExtended(dataUrl, settings);
   return settings.provider === 'cfbed' ? uploadToCfBed(dataUrl, settings) : uploadToImgchr(dataUrl);
 }
 
 async function imageHostUpload(req, res) {
   try {
-    const raw = await readRequestBody(req, 12 * 1024 * 1024);
+    const raw = await readRequestBody(req, 28 * 1024 * 1024);
     const payload = JSON.parse(raw.toString('utf8') || '{}');
     const result = await uploadHostedImage(payload.dataUrl, payload.settings || payload.imageHost);
     log('INFO', '图片上传完成', `${imageHostConfig(payload.settings || payload.imageHost).provider}，${raw.length} bytes 请求体`);
@@ -695,7 +712,10 @@ async function imageHostUpload(req, res) {
 async function setImageHostSettings(req, res) {
   try {
     const raw = await readRequestBody(req, 64 * 1024);
-    applyImageHostSettings(JSON.parse(raw.toString('utf8') || '{}'));
+    const settings = JSON.parse(raw.toString('utf8') || '{}');
+    const validation = validateImageHost(settings);
+    if (!validation.valid) throw new Error(validation.errors.join('；'));
+    applyImageHostSettings(settings);
     await runScheduledCacheCleanup(onebotState.imageHost);
     log('INFO', '图床设置已更新', onebotState.imageHost.provider);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -714,6 +734,50 @@ async function setImageHostSettings(req, res) {
   }
 }
 
+async function imageHostTest(req, res) {
+  try {
+    const payload = JSON.parse((await readRequestBody(req, 64 * 1024)).toString('utf8') || '{}');
+    const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jJesAAAAASUVORK5CYII=';
+    const result = await uploadHostedImage(pixel, payload.settings || onebotState.imageHost);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ...result, message: '测试图片已上传，请打开直链确认可公开访问' }));
+  } catch (error) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: error.message }));
+  }
+}
+
+async function markdownApi(req, res, useAi = false) {
+  try {
+    const payload = JSON.parse((await readRequestBody(req, 1024 * 1024)).toString('utf8') || '{}');
+    if (typeof payload.text !== 'string') throw new Error('请提供 text 字符串');
+    const result = useAi ? await checkWithAi(payload.text, payload.settings || aiRuntime) : { ...Markdown.analyzeMarkdown(payload.text), nodes: Markdown.markdownToNodes(payload.text) };
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(result));
+  } catch (error) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: error.message }));
+  }
+}
+
+async function markdownImage(req, res) {
+  try {
+    const payload = JSON.parse((await readRequestBody(req, 64 * 1024)).toString('utf8') || '{}');
+    const result = await processMarkdownImage(payload.url, payload.settings || onebotState.imageHost);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(result));
+  } catch (error) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: error.message }));
+  }
+}
+
+async function setAiSettings(req, res) {
+  try {
+    const payload = JSON.parse((await readRequestBody(req, 64 * 1024)).toString('utf8') || '{}');
+    aiRuntime = normalizeAi(payload);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ enabled: aiRuntime.enabled, baseUrl: aiRuntime.baseUrl, model: aiRuntime.model, keyConfigured: Boolean(aiRuntime.apiKey) }));
+  } catch (error) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: error.message }));
+  }
+}
+
 function getAppConfig(res) {
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(appConfig));
@@ -723,6 +787,7 @@ async function updateAppConfig(req, res) {
   try {
     const raw = await readRequestBody(req, 256 * 1024);
     appConfig = saveAppConfig(JSON.parse(raw.toString('utf8') || '{}'));
+    aiRuntime = normalizeAi(appConfig.ai);
     applyImageHostSettings(appConfig.imageHost);
     await runScheduledCacheCleanup(onebotState.imageHost);
     log('INFO', '本地配置已保存');
@@ -999,6 +1064,33 @@ async function processOneBotPhoto(photo) {
   const hosted = await uploadHostedImage(`data:image/jpeg;base64,${jpg.toString('base64')}`, onebotState.imageHost);
   cacheMedia(cacheKey, hosted, onebotState.imageHost);
   return { directUrl: hosted.directUrl, pageUrl: hosted.pageUrl };
+}
+
+async function processMarkdownImage(source, value) {
+  let url;
+  try { url = new URL(source); } catch { throw new Error('Markdown 图片地址无效'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Markdown 图片仅支持 HTTP(S) 公开地址');
+  const validation = validateImageHost(value);
+  if (!validation.valid) throw new Error(validation.errors.join('；'));
+  const settings = imageHostConfig(validation.config);
+  const cacheKey = `markdown:${createHash('sha256').update(url.toString()).digest('hex')}`;
+  const cached = await getCachedMedia(cacheKey, settings);
+  if (cached) return cached;
+  const input = await downloadOneBotBuffer(url.toString());
+  const jpg = await renderOneBotImage(input, '', 'Markdown 图片解码失败（需要 FFmpeg）');
+  const hosted = await uploadHostedImage(`data:image/jpeg;base64,${jpg.toString('base64')}`, settings);
+  cacheMedia(cacheKey, hosted, settings);
+  return hosted;
+}
+
+async function prepareOneBotMarkdownImages(nodes) {
+  const uploaded = new Map();
+  for (const node of nodes) if (node.icon?.type === 3) {
+    const source = node.icon.value;
+    if (!uploaded.has(source)) uploaded.set(source, await processMarkdownImage(source, onebotState.imageHost));
+    node.icon.value = uploaded.get(source).directUrl;
+  }
+  return nodes;
 }
 
 function onebotSenderName(user) {
@@ -1281,6 +1373,10 @@ function onebotLinkNodes(links) {
 }
 
 function onebotMessageNodes(sender, text, entities, hasUnsupportedCharacters = false) {
+  if (onebotState.markdownEnabled !== false && Markdown.detectMarkdown(text) && Markdown.analyzeMarkdown(text).valid) {
+    const nodes = Markdown.markdownToNodes(text, { sender });
+    return onebotState.photoEnabled ? nodes : nodes.map(node => node.icon?.type === 3 ? onebotTextNodes('[图片打印已关闭]')[0] : node);
+  }
   const formatted = onebotFormattedTextNodes(text, entities, sender ? `${sender}：` : '');
   const nodes = [...formatted.nodes, ...onebotLinkNodes(formatted.links)];
   if (hasUnsupportedCharacters) {
@@ -1651,7 +1747,7 @@ async function onebotLoop(generation) {
             }
             const imageNode = { icon: { value: photoResult.directUrl, style: { justification: 1 }, type: 3 } };
             const captionNodes = printableCaption
-              ? onebotMessageNodes('', caption, message.caption_entities, captionCharacters.length > 0)
+              ? await prepareOneBotMarkdownImages(onebotMessageNodes('', caption, message.caption_entities, captionCharacters.length > 0))
               : [];
             enqueuePrintMessage({
               userId,
@@ -1703,6 +1799,16 @@ async function onebotLoop(generation) {
           continue;
         }
         const printText = `${sender}：${printableMessageText}`;
+        let messageNodes, continuationNodes;
+        try {
+          messageNodes = await prepareOneBotMarkdownImages(onebotMessageNodes(sender, text, message.entities, unsupportedMessageCharacters.length > 0));
+          continuationNodes = await prepareOneBotMarkdownImages(onebotMessageNodes('', text, message.entities, unsupportedMessageCharacters.length > 0));
+        } catch (error) {
+          updateOneBotMessage(historyEntry.id, 'failed', error.message); saveOneBotAdminStore();
+          addOneBotLog('failed', 'Markdown 图片处理失败', error.message);
+          await onebotReply(message.chat?.id, onebotState.replyPrintFailed, generation); continue;
+        }
+        if (!onebotState.running || onebotState.generation !== generation) return;
         enqueuePrintMessage({
           userId,
           chatId: message.chat?.id,
@@ -1711,8 +1817,8 @@ async function onebotLoop(generation) {
           printText,
           textLength,
           unsupportedCharacters: unsupportedMessageCharacters,
-          nodes: onebotMessageNodes(sender, text, message.entities, unsupportedMessageCharacters.length > 0),
-          continuationNodes: onebotMessageNodes('', text, message.entities, unsupportedMessageCharacters.length > 0),
+          nodes: messageNodes,
+          continuationNodes,
         }, generation);
       }
     } catch (error) {
@@ -1789,6 +1895,7 @@ async function startOneBot(req, res) {
       onebotState.rateLimitPenaltyMinutes = rateLimitPenaltyMinutes;
       onebotState.rateLimitBlacklistOnThird = rateLimitBlacklistOnThird;
       onebotState.photoEnabled = body.photo_enabled !== false;
+      onebotState.markdownEnabled = body.markdown_enabled !== false;
       onebotState.replyPrinting = normalizeReply(body.reply_printing, '正在打印，请稍候。');
       onebotState.replyPrinted = normalizeReply(body.reply_printed, '已打印。');
       onebotState.replyPrintFailed = normalizeReply(body.reply_print_failed, '打印失败，请稍后重试。');
@@ -1861,6 +1968,7 @@ function onebotStatus(res) {
     rateLimitBlacklistOnThird: onebotState.rateLimitBlacklistOnThird,
     blacklist: blacklistEntries(),
     photoEnabled: onebotState.photoEnabled,
+    markdownEnabled: onebotState.markdownEnabled !== false,
     imageHost: {
       provider: onebotState.imageHost.provider,
       cacheExpireDays: onebotState.imageHost.cacheExpireDays,
@@ -1943,11 +2051,20 @@ const server = http.createServer((req, res) => {
     const level = res.statusCode >= 500 ? 'ERROR' : res.statusCode >= 400 ? 'WARN' : 'INFO';
     log(level, `HTTP ${req.method} ${requestUrl.pathname} -> ${res.statusCode}`, `${Date.now() - startedAt} ms`);
   });
+  if (req.method === 'GET' && requestUrl.pathname === '/api/app/info') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ version: '1.1.0', features: ['r2', 's3', 'custom-image-host', 'markdown', 'openai-compatible-check'] })); return;
+  }
   if (req.method === 'POST' && requestUrl.pathname === '/api/print') {
     proxyPrint(req, res, requestUrl);
     return;
   }
   if (req.method === 'POST' && requestUrl.pathname === '/api/image-host/upload') return imageHostUpload(req, res);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/image-host/test') return imageHostTest(req, res);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/markdown/analyze') return markdownApi(req, res);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/markdown/image') return markdownImage(req, res);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/markdown/check-ai') return markdownApi(req, res, true);
+  if (req.method === 'POST' && requestUrl.pathname === '/api/settings/ai') return setAiSettings(req, res);
   if (req.method === 'GET' && requestUrl.pathname === '/api/config') return getAppConfig(res);
   if (req.method === 'POST' && requestUrl.pathname === '/api/config') return updateAppConfig(req, res);
   if (req.method === 'DELETE' && requestUrl.pathname === '/api/config') return deleteAppConfig(res);

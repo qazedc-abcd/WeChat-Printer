@@ -25,6 +25,7 @@ test('server login, QQ filtering, admin replies, actual print batching, duplicat
   for (const name of await fs.readdir(__dirname)) {
     if (/\.(?:js|html|css)$/.test(name) && !name.endsWith('.test.js')) await fs.copyFile(path.join(__dirname, name), path.join(directory, name));
   }
+  await fs.cp(path.join(__dirname, 'vendor'), path.join(directory, 'vendor'), { recursive: true });
   const hook = path.join(directory, 'mock-printer-hook.cjs');
   await fs.writeFile(hook, `const https=require('node:https'),http=require('node:http');
 https.request=(options,callback)=>{
@@ -67,17 +68,24 @@ https.request=(options,callback)=>{
       .flatMap((node) => node.content?.lines?.linelist?.flatMap((line) => line.column) || []).join('');
     assert.ok(receiptText.includes('Mock sender'));
     assert.ok(receiptText.includes('Test print through OneBot'));
+    mock.broadcast(event(7, '# Markdown 标题\n\n- 清单\n\n![图](https://example.com/never-fetch.png)'));
+    await waitFor(() => prints.length === 2);
+    await waitFor(async () => (await status()).logs.filter(entry => entry.type === 'printed').length === 2);
+    const markdownNodes = prints[1].ad_content.user_define_template.root;
+    assert.ok(markdownNodes.some(node => node.content?.style.width === 1));
+    assert.ok(!markdownNodes.some(node => node.icon?.type === 3), 'photo_enabled=false also prevents Markdown image requests');
+    assert.ok(markdownNodes.some(node => node.content?.lines.linelist[0].column.join('').includes('图片打印已关闭')));
     const denied = event(5, '/block 55555'); mock.broadcast(denied);
     await waitFor(() => mock.actions.filter((call) => call.action === 'send_private_msg').length >= 4);
     const state = await status();
     assert.equal(state.blacklist.length, 0);
-    assert.equal(prints.length, 1);
+    assert.equal(prints.length, 2);
     const stopped = await fetch(baseUrl + '/api/onebot/stop', { method: 'POST' });
     assert.equal(stopped.status, 200);
     assert.equal((await status()).running, false);
     mock.broadcast(event(6, 'must not print after stop'));
     await new Promise((resolve) => setTimeout(resolve, 650));
-    assert.equal(prints.length, 1);
+    assert.equal(prints.length, 2);
     const config = await (await fetch(baseUrl + '/api/config')).json();
     assert.ok(config.onebot);
     assert.equal(config.telegram, undefined);

@@ -7,3 +7,4 @@ config.json
 .playwright-cli/
 output/
 dist/
+node_modules/

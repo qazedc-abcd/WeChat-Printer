@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Roboto+Condensed:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="vendor/lucide.min.js"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -99,6 +99,8 @@
                 <button class="add-eol-button" id="addEol" type="button"><i data-lucide="corner-down-left"></i><span>添加空行</span></button>
               </div>
             </div>
+            <div class="composer-shortcuts"><button class="table-action-button" id="addMarkdown" type="button"><i data-lucide="file-code-2"></i>Markdown 排版</button><button class="table-action-button" id="markdownExample" type="button">插入示例</button><label class="table-action-button file-picker-label" for="importMarkdown">导入 .md / .txt<input id="importMarkdown" type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden /></label></div>
+            <div id="imageDropZone" class="image-drop-zone" tabindex="0" role="button" aria-label="拖入或选择图片"><i data-lucide="image-up"></i><strong>拖入图片，或点击选择</strong><span id="imageQueueStatus">支持多张图片与粘贴截图</span><button id="cancelImageQueue" class="table-action-button" type="button" hidden>取消剩余</button></div><input id="bulkImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
             <div id="contentList" class="content-list"></div>
 
             <div class="actions-row">
@@ -122,7 +124,7 @@
                   <div class="receipt-content" id="receiptContent"></div>
                   </div>
                 </div>
-              <div class="preview-caption"><span class="caption-dot"></span><span>图片已用 Floyd-Steinberg 转换为纯黑/纯白；本地上传图片会在打印前自动上传图床。</span></div>
+              <div class="preview-caption"><span class="caption-dot"></span><span>拖入或粘贴图片可裁剪并自动上传；Markdown 图片会在发送前转为黑白图。请确认预览后打印。</span></div>
             </div>
 
             <div class="panel json-panel">
@@ -203,6 +205,7 @@
               </div>
               <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="onebotBlacklistOnThird"><input id="onebotBlacklistOnThird" type="checkbox" /><span class="switch-ui"></span><span>第三次触发后永久拉黑</span></label><span class="proxy-state">默认关闭</span></div>
               <div class="field-group"><label for="onebotAdminUserIds">管理员 QQ 号</label><input id="onebotAdminUserIds" type="text" inputmode="numeric" placeholder="例如：123456789，可用逗号分隔多个 ID" autocomplete="off" /><p class="field-help">在 QQ 私聊中发送 /whoami 可查看 QQ 号。仅这些 QQ 号可执行管理员指令；也可用环境变量 ONEBOT_ADMIN_USER_IDS 配置。</p></div>
+              <div class="proxy-toggle-row"><label class="switch-label" for="onebotMarkdownEnabled"><input id="onebotMarkdownEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>自动识别 QQ 消息中的 Markdown</span></label></div>
               <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="onebotPhotoEnabled"><input id="onebotPhotoEnabled" type="checkbox" checked /><span class="switch-ui"></span><span>允许打印图片消息</span></label><span class="proxy-state" id="onebotPhotoState">已开启</span></div>
               <div class="reply-fields">
                 <div class="field-group"><label for="replyPrinting">开始打印时回复</label><input id="replyPrinting" type="text" value="正在打印，请稍候。" maxlength="500" /></div>
@@ -238,9 +241,9 @@
           <div class="settings-grid">
             <section class="panel form-panel settings-panel">
               <div class="panel-heading"><div><p class="panel-index">01 / IMAGE HOST</p><h3>图床设置</h3></div><i data-lucide="cloud-upload" class="panel-icon"></i></div>
-              <form id="imageHostForm">
+              <form id="imageHostForm" novalidate>
                 <div class="field-group"><label for="storageMode">配置存储位置</label><select id="storageMode"><option value="browser">浏览器存储</option><option value="local">本地配置文件</option></select><p class="field-help" id="storageModeStatus">当前使用浏览器存储</p></div>
-                <div class="field-group"><label for="imageHostProvider">图床服务</label><select id="imageHostProvider"><option value="imgchr">路过图床（Imgchr）</option><option value="cfbed">CloudFlare ImgBed</option></select><p class="field-help">路过图床无需额外配置；CloudFlare ImgBed 需要填写你部署的站点地址。</p></div>
+                <div class="field-group"><label for="imageHostProvider">图床服务</label><select id="imageHostProvider"><option value="imgchr">路过图床（Imgchr）</option><option value="cfbed">CloudFlare ImgBed</option><option value="r2">Cloudflare R2</option><option value="s3">S3 兼容存储</option><option value="custom">自定义 HTTP 图床</option></select><p class="field-help">可直接连接 R2、S3 兼容存储或自己的上传接口；公开直链须能被小票机访问。</p></div>
                 <div id="cfBedFields" class="cfbed-fields hidden-view">
                   <div class="field-group"><label for="cfBedBaseUrl">站点地址 <span class="required">必填</span></label><input id="cfBedBaseUrl" type="url" placeholder="例如：https://img.example.com" autocomplete="url" spellcheck="false" /><p class="field-help">填写 CloudFlare ImgBed 根地址，程序会请求该站点的 <span class="mono">/upload</span> 接口。</p></div>
                   <div class="settings-two-column">
@@ -251,6 +254,23 @@
                   <div class="field-group compact-field"><label for="cfBedCacheExpireDays">缓存过期天数</label><input id="cfBedCacheExpireDays" type="number" min="0" max="36500" step="1" value="7" inputmode="numeric" /><p class="field-help">仅影响 QQ 图片的重复上传缓存；填写 0 表示永不过期，默认 7 天。设置为 0 时不会产生过期图片。</p></div>
                   <div class="proxy-toggle-row sticker-toggle-row"><label class="switch-label" for="cfBedDeleteExpiredCache"><input id="cfBedDeleteExpiredCache" type="checkbox" /><span class="switch-ui"></span><span>自动删除过期远程图片</span></label><span class="proxy-state">每天本地 0 点检查，启动时当天未检查则补做</span></div>
                 </div>
+                <div id="s3Fields" class="hidden-view provider-fields">
+                  <p class="field-help" id="s3ProviderHint"></p>
+                  <div class="field-group"><label for="s3Endpoint">S3 API Endpoint</label><input id="s3Endpoint" type="url" placeholder="https://账户ID.r2.cloudflarestorage.com" spellcheck="false" autocomplete="off" /></div>
+                  <div class="settings-two-column"><div class="field-group"><label for="s3Bucket">Bucket</label><input id="s3Bucket" placeholder="wechat-printer" autocomplete="off" /></div><div class="field-group"><label for="s3Region">Region</label><input id="s3Region" value="auto" placeholder="R2: auto / S3: us-east-1" autocomplete="off" /></div></div>
+                  <div class="settings-two-column"><div class="field-group"><label for="s3AccessKeyId">Access Key ID</label><input id="s3AccessKeyId" autocomplete="off" spellcheck="false" /></div><div class="field-group"><label for="s3SecretAccessKey">Secret Access Key</label><input id="s3SecretAccessKey" type="password" autocomplete="off" /></div></div>
+                  <div class="field-group"><label for="s3PublicBaseUrl">公开访问地址</label><input id="s3PublicBaseUrl" type="url" placeholder="https://img.example.com" autocomplete="off" /><p class="field-help">填写桶的公开域名，不是签名上传 Endpoint。文件路径由程序自动拼接。</p></div>
+                  <div class="field-group"><label for="s3Prefix">对象前缀</label><input id="s3Prefix" value="wechat-printer" placeholder="wechat-printer" /><p class="field-help">图片按前缀 / 日期 / 内容哈希命名，避免文件名冲突。</p></div>
+                  <details class="advanced-settings"><summary>S3 高级设置</summary><label class="switch-label" for="s3PathStyle"><input id="s3PathStyle" type="checkbox" checked />使用路径式寻址（R2 / MinIO 常用）</label><div class="field-group"><label for="s3SessionToken">Session Token（临时凭据可选）</label><input id="s3SessionToken" type="password" autocomplete="off" /></div></details>
+                  <a class="settings-doc-link" href="https://github.com/qazedc-abcd/WeChat-Printer/blob/main/docs/R2-S3-SETUP.md" target="_blank" rel="noreferrer">R2 / S3 配置教程</a>
+                </div>
+                <div id="customHostFields" class="hidden-view provider-fields">
+                  <div class="field-group"><label for="customUploadUrl">上传接口</label><input id="customUploadUrl" type="url" placeholder="https://img.example.com/api/upload" autocomplete="off" /></div>
+                  <div class="settings-two-column"><div class="field-group"><label for="customFileField">文件字段名</label><input id="customFileField" value="file" /></div><div class="field-group"><label for="customResponsePath">响应中 URL 的 JSON 路径</label><input id="customResponsePath" value="url" placeholder="data.url 或 0.url" /></div></div>
+                  <div class="field-group"><label for="customAuthorization">Authorization（可选）</label><input id="customAuthorization" type="password" placeholder="Bearer 你的令牌" autocomplete="off" /><p class="field-help">使用 multipart/form-data POST 上传。按返回路径提取图片直链。</p></div>
+                </div>
+                <div id="objectCacheField" class="field-group hidden-view"><label for="objectCacheDays">图片缓存天数</label><input id="objectCacheDays" type="number" min="0" max="36500" value="7" /><p class="field-help">0 为永不过期。R2 / S3 对象可在存储服务配置生命周期，本工具不会自动删除它们。</p></div>
+                <div class="settings-test-row"><button class="button secondary" id="testImageHost" type="button">上传测试图片</button><span id="imageHostTestResult" role="status"></span></div>
                 <button class="button primary settings-save" id="saveImageHost" type="submit"><i data-lucide="save"></i><span>保存图床设置</span></button>
               </form>
             </section>
@@ -258,18 +278,25 @@
             <aside class="panel form-panel settings-info-panel">
               <div class="panel-heading"><div><p class="panel-index">02 / SECURITY</p><h3>连接说明</h3></div><i data-lucide="shield-check" class="panel-icon"></i></div>
               <div class="settings-info-list">
-                <div><i data-lucide="key-round"></i><p><strong>按需授权</strong><span>仅上传需要 <span class="mono">upload</span>；开启自动删除还需要 <span class="mono">delete</span> 权限。</span></p></div>
+                <div><i data-lucide="key-round"></i><p><strong>按需授权</strong><span>R2 / S3 使用限于目标桶的对象读写凭据。ImgBed 自动清理还需删除权限。</span></p></div>
                 <div><i data-lucide="hard-drive"></i><p><strong>按选择保存</strong><span>配置可保存在当前浏览器，也可以写入程序目录的 config.json；上传请求始终由本机服务发出。</span></p></div>
-                <div><i data-lucide="link"></i><p><strong>直链输出</strong><span>上传请求使用 <span class="mono">returnFormat=full</span>，优先读取响应中的 <span class="mono">publicUrl</span>。</span></p></div>
+                <div><i data-lucide="link"></i><p><strong>公开访问</strong><span>小票机通过直链下载图片，不能使用需要登录的页面。先上传测试图片，检查直链能否打开。</span></p></div>
               </div>
               <a class="settings-doc-link" href="https://cfbed.sanyue.de/api/upload.html" target="_blank" rel="noreferrer"><i data-lucide="external-link"></i><span>查看 CloudFlare ImgBed 上传 API</span></a>
             </aside>
           </div>
+          <section class="panel form-panel ai-settings-panel"><div class="panel-heading"><div><p class="panel-index">OPTIONAL AI</p><h3>Markdown AI 检查</h3></div><i data-lucide="sparkles"></i></div>
+            <form id="aiSettingsForm"><label class="switch-label" for="aiEnabled"><input id="aiEnabled" type="checkbox" />启用可选 AI 检查</label><p class="field-help" id="aiPrivacyHint">默认关闭，仅手动检查时发送当前正文。</p>
+              <div class="settings-two-column"><div class="field-group"><label for="aiBaseUrl">兼容 OpenAI 的 API 基础地址</label><input id="aiBaseUrl" type="url" value="https://api.openai.com/v1" placeholder="https://api.example.com/v1" autocomplete="off" /></div><div class="field-group"><label for="aiModel">模型名称</label><input id="aiModel" placeholder="填写接口提供商支持的模型" autocomplete="off" /></div></div>
+              <div class="field-group"><label for="aiApiKey">API Key（本地接口未鉴权时可留空）</label><input id="aiApiKey" type="password" autocomplete="off" /><p class="field-help">使用 Chat Completions 兼容格式。密钥按当前配置存储位置保存，AI 建议需手动应用。</p></div>
+              <button id="saveAiSettings" type="submit" class="button secondary">保存 AI 设置</button>
+            </form>
+          </section>
           <div class="notice settings-notice" id="settingsNotice" role="status" aria-live="polite"><div class="notice-icon"><i data-lucide="info"></i></div><div><strong>当前使用路过图床</strong><p>处理后的图片会上传到 Imgchr，并将返回的图片直链写入打印 JSON；相同 OneBot 媒体缓存 7 天。</p></div></div>
         </section>
       </main>
 
-      <footer class="footer"><span>WECHAT SMART PRINTER</span><span class="footer-line"></span><span>API / PRINTAD</span></footer>
+      <footer class="footer"><span>WECHAT SMART PRINTER <span id="appVersion">v1.1.0</span></span><span class="footer-line"></span><span>API / PRINTAD</span></footer>
     </div>
     <div class="crop-modal hidden" id="jsonImportModal" role="dialog" aria-modal="true" aria-labelledby="jsonImportModalTitle">
       <div class="crop-dialog json-import-dialog">
@@ -289,9 +316,13 @@
         <div class="crop-actions"><button class="button secondary" id="cancelCrop" type="button">取消</button><button class="button primary" id="applyCrop" type="button"><i data-lucide="arrow-right"></i><span>应用裁剪并继续</span></button></div>
       </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script src="vendor/qrcodejs.min.js"></script>
     <script src="printable-text.js"></script>
     <script src="print-response.js"></script>
+    <script src="vendor/markdown-it.min.js"></script>
+    <script src="image-host-settings.js"></script>
+    <script src="markdown-engine.js"></script>
+    <script src="enhancements.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

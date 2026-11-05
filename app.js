@@ -19,6 +19,7 @@ const MAX_IMAGE_SIZE = 280;
 let cropState = null;
 let developerMode = false;
 let developerJsonDirty = false;
+let aiSettings = PrinterEnhancements.readAiSettings();
 let imageHostSettings = { provider: 'imgchr', cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false };
 let storageMode = 'browser';
 let localConfig = null;
@@ -110,18 +111,19 @@ function currentConfig() {
       rateLimitBlacklistOnThird: $('onebotBlacklistOnThird').checked,
       adminUserIds: $('onebotAdminUserIds').value.split(',').map((value) => value.trim()).filter(Boolean),
       blacklist: onebotBlacklist,
-      photoEnabled: $('onebotPhotoEnabled').checked,
+      photoEnabled: $('onebotPhotoEnabled').checked, markdownEnabled: $('onebotMarkdownEnabled').checked,
       reply_printing: $('replyPrinting').value, reply_printed: $('replyPrinted').value,
       reply_print_failed: $('replyPrintFailed').value, reply_unsupported: $('replyUnsupported').value,
       reply_rate_limited: $('replyRateLimited').value,
     },
     imageHost: imageHostSettings,
+    ai: aiSettings,
   };
   return config;
 }
 
 function clearBrowserConfig() {
-  [SAVED_DEVICES_KEY, ONEBOT_API_KEY, ONEBOT_RULES_KEY, DEVICE_DRAFT_KEY, ONEBOT_DRAFT_KEY, IMAGE_HOST_KEY].forEach((key) => localStorage.removeItem(key));
+  [PrinterEnhancements.AI_KEY, SAVED_DEVICES_KEY, ONEBOT_API_KEY, ONEBOT_RULES_KEY, DEVICE_DRAFT_KEY, ONEBOT_DRAFT_KEY, IMAGE_HOST_KEY].forEach((key) => localStorage.removeItem(key));
 }
 
 function scheduleLocalConfigSave() {
@@ -143,8 +145,9 @@ function writeBrowserConfig(config) {
   localStorage.setItem(DEVICE_DRAFT_KEY, JSON.stringify({ sn: value.device?.sn || '', sid: value.device?.sid || '', accountType: value.device?.accountType ?? value.device?.account_type ?? '' }));
   localStorage.setItem(ONEBOT_DRAFT_KEY, JSON.stringify({ apiBase: value.onebot?.apiBase || '', token: value.onebot?.token || '' }));
   localStorage.setItem(ONEBOT_API_KEY, value.onebot?.apiBase || '');
-  localStorage.setItem(ONEBOT_RULES_KEY, JSON.stringify({ maxPerMinute: value.onebot?.maxPerMinute ?? 2, maxCharsPerTask: value.onebot?.maxCharsPerTask ?? 0, rateLimitStrikeWindowMinutes: value.onebot?.rateLimitStrikeWindowMinutes ?? 1, rateLimitPenaltyMinutes: value.onebot?.rateLimitPenaltyMinutes || [2, 10, 1440], rateLimitBlacklistOnThird: value.onebot?.rateLimitBlacklistOnThird === true, adminUserIds: value.onebot?.adminUserIds || [], blacklist: value.onebot?.blacklist || [], photoEnabled: value.onebot?.photoEnabled !== false, reply_printing: value.onebot?.reply_printing || '', reply_printed: value.onebot?.reply_printed || '', reply_print_failed: value.onebot?.reply_print_failed || '', reply_unsupported: value.onebot?.reply_unsupported || '', reply_rate_limited: value.onebot?.reply_rate_limited || '' }));
+  localStorage.setItem(ONEBOT_RULES_KEY, JSON.stringify({ maxPerMinute: value.onebot?.maxPerMinute ?? 2, maxCharsPerTask: value.onebot?.maxCharsPerTask ?? 0, rateLimitStrikeWindowMinutes: value.onebot?.rateLimitStrikeWindowMinutes ?? 1, rateLimitPenaltyMinutes: value.onebot?.rateLimitPenaltyMinutes || [2, 10, 1440], rateLimitBlacklistOnThird: value.onebot?.rateLimitBlacklistOnThird === true, adminUserIds: value.onebot?.adminUserIds || [], blacklist: value.onebot?.blacklist || [], photoEnabled: value.onebot?.photoEnabled !== false, markdownEnabled: value.onebot?.markdownEnabled !== false, reply_printing: value.onebot?.reply_printing || '', reply_printed: value.onebot?.reply_printed || '', reply_print_failed: value.onebot?.reply_print_failed || '', reply_unsupported: value.onebot?.reply_unsupported || '', reply_rate_limited: value.onebot?.reply_rate_limited || '' }));
   localStorage.setItem(IMAGE_HOST_KEY, JSON.stringify(value.imageHost || { provider: 'imgchr' }));
+  localStorage.setItem(PrinterEnhancements.AI_KEY, JSON.stringify(value.ai || aiSettings));
   localStorage.removeItem(SAVED_DEVICES_KEY);
 }
 
@@ -172,12 +175,13 @@ function applyConfig(config) {
   onebotBlacklist = Array.isArray(onebot.blacklist) ? onebot.blacklist : [];
   renderOneBotBlacklist(onebotBlacklist);
   $('onebotPhotoEnabled').checked = onebot.photoEnabled !== false;
+  $('onebotMarkdownEnabled').checked = onebot.markdownEnabled !== false;
   $('onebotPhotoState').textContent = $('onebotPhotoEnabled').checked ? '已开启' : '已关闭';
   const replyFields = { replyPrinting: 'reply_printing', replyPrinted: 'reply_printed', replyPrintFailed: 'reply_print_failed', replyUnsupported: 'reply_unsupported', replyRateLimited: 'reply_rate_limited' };
   Object.entries(replyFields).forEach(([id, key]) => { if (Object.prototype.hasOwnProperty.call(onebot, key)) $(id).value = onebot[key]; });
-  imageHostSettings = value.imageHost?.provider === 'cfbed'
-    ? { ...value.imageHost, cacheExpireDays: normalizeCacheExpireDays(value.imageHost.cacheExpireDays), deleteExpiredCache: value.imageHost.deleteExpiredCache === true }
-    : { provider: 'imgchr', cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false };
+  imageHostSettings = PrinterImageHost.normalizeImageHost(value.imageHost || {});
+  aiSettings = PrinterEnhancements.normalizeAiClient(value.ai || {});
+  PrinterEnhancements.renderAiSettings();
   renderSavedDevices();
   renderImageHostSettings();
 
@@ -212,52 +216,13 @@ async function clearLocalConfigFile() {
 }
 
 function readImageHostSettings() {
-  try {
-    const value = JSON.parse(localStorage.getItem(IMAGE_HOST_KEY) || '{}');
-    return value?.provider === 'cfbed' ? {
-      provider: 'cfbed',
-      baseUrl: String(value.baseUrl || ''),
-      token: String(value.token || ''),
-      authCode: String(value.authCode || ''),
-      uploadChannel: String(value.uploadChannel || ''),
-      cacheExpireDays: normalizeCacheExpireDays(value.cacheExpireDays),
-      deleteExpiredCache: value.deleteExpiredCache === true,
-    } : { provider: 'imgchr', cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false };
-  } catch { return { provider: 'imgchr', cacheExpireDays: DEFAULT_CACHE_EXPIRE_DAYS, deleteExpiredCache: false }; }
+  try { return PrinterImageHost.normalizeImageHost(JSON.parse(localStorage.getItem(IMAGE_HOST_KEY) || '{}')); }
+  catch { return PrinterImageHost.normalizeImageHost(); }
 }
 
-function imageHostFormSettings() {
-  const provider = $('imageHostProvider').value === 'cfbed' ? 'cfbed' : 'imgchr';
-  return {
-    provider,
-    baseUrl: $('cfBedBaseUrl').value.trim(),
-    token: $('cfBedToken').value.trim(),
-    authCode: $('cfBedAuthCode').value.trim(),
-    uploadChannel: $('cfBedUploadChannel').value,
-    cacheExpireDays: provider === 'cfbed' ? normalizeCacheExpireDays($('cfBedCacheExpireDays').value) : DEFAULT_CACHE_EXPIRE_DAYS,
-    deleteExpiredCache: provider === 'cfbed' && $('cfBedDeleteExpiredCache').checked,
-  };
-}
+function imageHostFormSettings() { return PrinterEnhancements.imageHostFormSettings(); }
 
-function renderImageHostSettings() {
-  const settings = imageHostSettings;
-  $('imageHostProvider').value = settings.provider;
-  $('cfBedBaseUrl').value = settings.baseUrl || '';
-  $('cfBedToken').value = settings.token || '';
-  $('cfBedAuthCode').value = settings.authCode || '';
-  $('cfBedUploadChannel').value = settings.uploadChannel || '';
-  $('cfBedCacheExpireDays').value = normalizeCacheExpireDays(settings.cacheExpireDays);
-  $('cfBedDeleteExpiredCache').checked = settings.deleteExpiredCache === true;
-  const isCfBed = settings.provider === 'cfbed';
-  $('cfBedFields').classList.toggle('hidden-view', !isCfBed);
-  $('imageHostStatus').textContent = isCfBed ? 'CloudFlare ImgBed' : '路过图床';
-  $('settingsNotice').className = `notice settings-notice ${isCfBed ? 'success' : ''}`.trim();
-  $('settingsNotice').querySelector('strong').textContent = isCfBed ? '当前使用 CloudFlare ImgBed' : '当前使用路过图床';
-  const cacheExpireDays = normalizeCacheExpireDays(settings.cacheExpireDays);
-  const cacheText = cacheExpireDays === 0 ? '缓存永不过期' : `缓存 ${cacheExpireDays} 天后重新上传`;
-  const deleteText = settings.deleteExpiredCache ? '，并每天本地 0 点（当天启动未检查时补做）自动删除过期远程文件' : '';
-  $('settingsNotice').querySelector('p').textContent = isCfBed ? `处理后的图片会上传到你配置的 CloudFlare ImgBed，并使用响应中的公开直链；${cacheText}${deleteText}。` : '处理后的图片会上传到 Imgchr，并将返回的图片直链写入打印 JSON；相同 OneBot 媒体缓存 7 天。';
-}
+function renderImageHostSettings() { PrinterEnhancements.renderImageHostSettings(); }
 
 function setSettingsNotice(type, title, message) {
   const notice = $('settingsNotice');
@@ -298,11 +263,8 @@ async function syncImageHostSettings() {
 async function saveImageHostSettings(event) {
   event.preventDefault();
   const settings = imageHostFormSettings();
-  if (settings.provider === 'cfbed' && !settings.baseUrl) {
-    setNotice('error', '无法保存图床设置', '请填写 CloudFlare ImgBed 站点地址。');
-    $('cfBedBaseUrl').focus();
-    return;
-  }
+  const validation = PrinterImageHost.validateImageHost(settings);
+  if (!validation.valid) { setSettingsNotice('error', '图床设置未完成', validation.errors.join('；')); return; }
   const button = $('saveImageHost');
   button.disabled = true;
   try {
@@ -329,9 +291,9 @@ async function saveImageHostSettings(event) {
       ? (settings.cacheExpireDays === 0 ? '缓存永不过期' : `缓存 ${settings.cacheExpireDays} 天后重新上传`)
       : '缓存 7 天后重新上传';
     const deleteText = settings.deleteExpiredCache ? '，并每天本地 0 点（当天启动未检查时补做）自动删除过期远程图片' : '';
-    const providerText = settings.provider === 'cfbed' ? 'CloudFlare ImgBed' : '路过图床';
-    setSettingsNotice('success', '图床设置已保存', `后续QQ 图片 将上传到${providerText}，${cacheText}${deleteText}。`);
-    setNotice('success', '图床设置已保存', `后续QQ 图片 将上传到${providerText}，${cacheText}${deleteText}。`);
+    const providerText = PrinterImageHost.NAMES[settings.provider];
+    setSettingsNotice('success', '图床设置已保存', `后续图片将上传到${providerText}，${cacheText}${deleteText}。`);
+    setNotice('success', '图床设置已保存', `后续图片将上传到${providerText}，${cacheText}${deleteText}。`);
   } catch (error) {
     setSettingsNotice('error', '图床设置保存失败', error.message);
     setNotice('error', '图床设置保存失败', error.message);
@@ -368,6 +330,7 @@ function persistOneBotRules() {
     reply_unsupported: $('replyUnsupported').value,
     reply_rate_limited: $('replyRateLimited').value,
     photo_enabled: $('onebotPhotoEnabled').checked,
+    markdownEnabled: $('onebotMarkdownEnabled').checked,
   };
   if (storageMode === 'local') { scheduleLocalConfigSave(); return; }
   try { localStorage.setItem(ONEBOT_RULES_KEY, JSON.stringify(rules)); } catch { /* browser storage may be unavailable */ }
@@ -561,7 +524,7 @@ async function startOneBot() {
     return;
   }
   try {
-    const response = await fetch('/api/onebot/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_base: apiBase, max_per_minute: maxPerMinute, max_chars_per_task: maxCharsPerTask, rate_limit_strike_window_minutes: rateLimitStrikeWindowMinutes, rate_limit_penalty_minutes: rateLimitPenaltyMinutes, rate_limit_blacklist_on_third: rateLimitBlacklistOnThird, admin_user_ids: adminUserIds, blacklist: onebotBlacklist, photo_enabled: photoEnabled, image_host: imageHostSettings, ...replies, token, ...device }) });
+    const response = await fetch('/api/onebot/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_base: apiBase, max_per_minute: maxPerMinute, max_chars_per_task: maxCharsPerTask, rate_limit_strike_window_minutes: rateLimitStrikeWindowMinutes, rate_limit_penalty_minutes: rateLimitPenaltyMinutes, rate_limit_blacklist_on_third: rateLimitBlacklistOnThird, admin_user_ids: adminUserIds, blacklist: onebotBlacklist, photo_enabled: photoEnabled, markdown_enabled: $('onebotMarkdownEnabled').checked, image_host: imageHostSettings, ...replies, token, ...device }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '启动失败');
     if (storageMode === 'browser') {
@@ -818,7 +781,7 @@ function renderContentList() {
       </div></div>
       <p class="field-help image-item-help">${item.processedDataUrl ? '已完成 1:1 裁剪与 Floyd-Steinberg 二值化，打印前会自动上传图床。' : '可直接填写图片 URL，或上传本地图片后裁剪。'}</p>
     </div>
-  ` : item.type === 'qrcode' ? `
+  ` : item.type === 'markdown' ? PrinterEnhancements.markdownEditor(item, index) : item.type === 'qrcode' ? `
     <div class="content-item qr-item" data-content-index="${index}">
       <div class="content-item-title"><span><i data-lucide="scan-qr-code"></i>二维码节点 <small>#${index + 1}</small></span><button class="icon-button remove-content" type="button" title="删除二维码节点" aria-label="删除二维码节点"><i data-lucide="trash-2"></i></button></div>
       <textarea rows="2" maxlength="1000" placeholder="输入网址或二维码内容" aria-label="二维码内容 ${index + 1}">${escapeHtml(item.value)}</textarea>
@@ -894,6 +857,7 @@ function renderContentList() {
   $('contentList').querySelectorAll('.content-item').forEach((element) => {
     const index = Number(element.dataset.contentIndex);
     const item = contentItems[index];
+    PrinterEnhancements.bindItem(element, item, index);
     const input = element.querySelector('input[type="url"], textarea');
     if (input && ['image', 'qrcode', 'scaledText'].includes(item.type)) input.addEventListener('input', () => {
       item[item.type === 'image' ? 'url' : item.type === 'qrcode' ? 'value' : 'text'] = input.value;
@@ -1059,10 +1023,12 @@ function resizeCropSelection(size) {
 }
 
 function openCropModal(file, itemIndex) {
-  if (!file.type.startsWith('image/')) return;
+  if (!file.type.startsWith('image/') || file.size > 20 * 1024 * 1024) { setNotice('error', '图片不可用', '请选择 20 MB 以内的图片。'); closeCropModal(); return; }
   const reader = new FileReader();
+  reader.onerror = () => { setNotice('error', '读取图片失败', '请选择其他图片重试。'); closeCropModal(); };
   reader.onload = () => {
     const image = new Image();
+    image.onerror = () => { setNotice('error', '图片解码失败', '请转换为 PNG、JPEG 或 WebP 后重试。'); closeCropModal(); };
     image.onload = () => {
       const canvas = $('cropCanvas');
       const maxDisplay = 320;
@@ -1103,6 +1069,7 @@ function openCropModal(file, itemIndex) {
 function closeCropModal() {
   cropState = null;
   $('cropModal').classList.add('hidden');
+  PrinterEnhancements.cropClosed();
 }
 
 function applyToneAdjustments(value, gamma, contrast) {
@@ -1215,6 +1182,7 @@ function finishImageProcessing() {
   closeCropModal();
   renderContentList();
   render();
+  if (item?.processedDataUrl) PrinterEnhancements.uploadItem(item);
 }
 
 function backToCropStep() {
@@ -1316,7 +1284,8 @@ function buildPayload() {
     const alignment = Number.isInteger(item.alignment) ? item.alignment : 1;
     if (item.type === 'image' && item.url.trim()) root.push({ icon: { value: item.url.trim(), style: { justification: alignment }, type: 3 } });
     if (item.type === 'qrcode' && printableText(item.value).trim()) root.push({ icon: { value: printableText(item.value).trim(), style: { justification: alignment }, type: 1 } });
-    if (item.type === 'text') {
+    if (PrinterEnhancements.isMarkdownItem(item)) root.push(...PrinterEnhancements.markdownNodes(item));
+    if (item.type === 'text' && !PrinterEnhancements.isMarkdownItem(item)) {
       const columns = textColumnValues(item).map((value) => printableText(value));
       if (columns.some((value) => value.trim())) root.push({ text: { column: columns.map((value) => ({ value })), column_align: columns.map(() => ({})) } });
     }
@@ -1359,7 +1328,7 @@ function buildPayload() {
 
 function render() {
   const preview = $('receiptContent');
-  preview.innerHTML = contentItems.map((item, index) => item.type === 'image'
+  preview.innerHTML = contentItems.map((item, index) => PrinterEnhancements.isMarkdownItem(item) ? `<div class="markdown-receipt">${PrinterMarkdown.receiptHtml(PrinterEnhancements.markdownNodes(item))}</div>` : item.type === 'image'
     ? `<div class="receipt-image-wrap align-${item.alignment ?? 1}" id="receiptImageWrap-${index}"><canvas role="img" aria-label="第 ${index + 1} 张小票图片二值化预览"></canvas></div>`
       : item.type === 'qrcode'
       ? `<div class="receipt-qr-wrap align-${item.alignment ?? 1}" id="receiptQrWrap-${index}"><div class="receipt-qr" role="img" aria-label="第 ${index + 1} 个二维码预览">${printableText(item.value).trim() ? '' : '<span class="receipt-qr-empty">请输入二维码内容</span>'}</div></div>`
@@ -1492,6 +1461,7 @@ function setNotice(type, title, message) {
 }
 
 async function printReceipt() {
+  if (!developerMode && !PrinterEnhancements.validatePrintContent()) return;
   let sidExpired = false;
   let developerPayload = null;
   if (developerMode) {
@@ -1521,14 +1491,12 @@ async function printReceipt() {
   setNotice('', '正在发送', '正在连接微信支付打印接口，请稍候。');
   try {
     if (!developerMode) {
+      await PrinterEnhancements.prepareMarkdownImages();
       for (const item of contentItems) {
         if (item.type !== 'image' || !item.processedDataUrl || item.uploadedUrl) continue;
         setNotice('', '正在上传图片', '正在将处理后的图片上传到当前图床，请稍候。');
-        const uploadResponse = await fetch('/api/image-host/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl: item.processedDataUrl, settings: imageHostSettings }) });
-        const uploadResult = await uploadResponse.json().catch(() => ({}));
-        if (!uploadResponse.ok || !uploadResult.directUrl) throw new Error(uploadResult.error || '图片上传失败');
-        item.url = uploadResult.directUrl;
-        item.uploadedUrl = uploadResult.directUrl;
+        await PrinterEnhancements.uploadItem(item);
+        if (!item.uploadedUrl) throw new Error('图片尚未上传成功，请检查图床配置后重试');
       }
       renderContentList();
       render();
@@ -1733,10 +1701,6 @@ $('jsonEditor').addEventListener('input', () => {
 });
 
 renderSavedDevices();
-$('imageHostProvider').addEventListener('change', () => {
-  const isCfBed = $('imageHostProvider').value === 'cfbed';
-  $('cfBedFields').classList.toggle('hidden-view', !isCfBed);
-});
 $('storageMode').addEventListener('change', (event) => {
   const nextMode = event.target.value === 'local' ? 'local' : 'browser';
   $('storageModeStatus').textContent = nextMode === 'local' ? '保存图床设置后写入程序目录的 config.json' : '保存图床设置后写入当前浏览器';
@@ -1756,6 +1720,7 @@ if (storageMode === 'browser') {
     if (Object.prototype.hasOwnProperty.call(rules, 'rateLimitStrikeWindowMinutes')) $('onebotStrikeWindowMinutes').value = rules.rateLimitStrikeWindowMinutes;
     if (Array.isArray(rules.rateLimitPenaltyMinutes)) [1, 2, 3].forEach((index) => { if (Number.isFinite(Number(rules.rateLimitPenaltyMinutes[index - 1]))) $(`onebotPenalty${index}`).value = rules.rateLimitPenaltyMinutes[index - 1]; });
     if (Object.prototype.hasOwnProperty.call(rules, 'rateLimitBlacklistOnThird')) $('onebotBlacklistOnThird').checked = rules.rateLimitBlacklistOnThird === true;
+    if (Object.prototype.hasOwnProperty.call(rules, 'markdownEnabled')) $('onebotMarkdownEnabled').checked = rules.markdownEnabled !== false;
     if (Array.isArray(rules.adminUserIds)) $('onebotAdminUserIds').value = rules.adminUserIds.join(', ');
     if (Array.isArray(rules.blacklist)) { onebotBlacklist = rules.blacklist; renderOneBotBlacklist(onebotBlacklist); }
     if (Object.prototype.hasOwnProperty.call(rules, 'photoEnabled') || Object.prototype.hasOwnProperty.call(rules, 'photo_enabled')) {
@@ -1776,6 +1741,7 @@ if (storageMode === 'browser') {
 [$('onebotApiBase'), $('onebotToken')].filter(Boolean).forEach((element) => element.addEventListener('input', persistOneBotDraft));
 [$('onebotMaxPerMinute'), $('onebotMaxCharsPerTask'), $('onebotStrikeWindowMinutes'), $('onebotPenalty1'), $('onebotPenalty2'), $('onebotPenalty3'), $('replyPrinting'), $('replyPrinted'), $('replyPrintFailed'), $('replyUnsupported'), $('replyRateLimited')].filter(Boolean).forEach((element) => element.addEventListener('input', persistOneBotRules));
 $('onebotBlacklistOnThird').addEventListener('change', persistOneBotRules);
+$('onebotMarkdownEnabled').addEventListener('change', persistOneBotRules);
 $('onebotBlacklistList').addEventListener('click', (event) => {
   const button = event.target.closest('[data-blacklist-user-id]');
   if (button) removeOneBotBlacklist(button.dataset.blacklistUserId);
@@ -1816,3 +1782,5 @@ loadLocalConfig().then((loaded) => {
     setNotice('error', '本地配置读取失败', `${error.message}，已回退到浏览器配置。`);
   }
 }).then(() => syncImageHostSettings().catch(() => {}));
+
+PrinterEnhancements.init();
