@@ -7,6 +7,10 @@ Android 与 Windows 的纯打印客户端，使用 **Flutter + Material Design 3
 - Windows：侧边导航、编辑 / 纸面预览双栏，支持窄窗口。
 - 两端独立运行，无需 Node.js、电脑服务或 FFmpeg。
 
+**[下载 Android / Windows 预览版](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/print-only-v0.1.0)** · [保留 QQ 接入的 main 版本](https://github.com/qazedc-abcd/WeChat-Printer/tree/main)
+
+Android 通常选择 arm64-v8a APK；Windows 完整解压 ZIP 后运行 xiaopiao.exe。Android 预览版使用开发测试签名，正式发布需配置持久签名。
+
 ## 界面预览
 
 Windows：
@@ -85,4 +89,4 @@ Windows 支持 Ctrl+Enter 发送、Ctrl+O 导入、Ctrl+S 导出。图片与 Mar
 
 ## 来源与许可
 
-本项目基于 [lemonno2333/WeChat-Printer](https://github.com/lemonno2333/WeChat-Printer) 的协议研究与应用方向，沿用 [MIT License](LICENSE)。本分支以 Dart / Flutter 重新实现纯打印客户端；Flutter 与各依赖保留其自身许可证，可在系统设置的许可页面或依赖包中查阅。
+本项目基于 [lemonno2333/WeChat-Printer](https://github.com/lemonno2333/WeChat-Printer) 的协议研究与应用方向，沿用 [MIT License](LICENSE)。本分支以 Dart / Flutter 重新实现纯打印客户端；Flutter 与各依赖保留其自身许可证，可在随构建附带的许可文件及依赖包中查阅。
