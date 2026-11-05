@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
 import 'package:wechat_printer_print_only/app_controller.dart';
@@ -21,24 +22,55 @@ Future<void> exerciseClipboard(
   await app.initialize();
   await tester.pumpWidget(PrinterApp(controller: app, enableNativeDrop: false));
   await tester.pumpAndSettle();
+  Future<void> waitFor(Finder target) async {
+    for (
+      var attempt = 0;
+      attempt < 30 && target.evaluate().isEmpty;
+      attempt++
+    ) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(target, findsOneWidget);
+  }
+
   Future<void> tap(Finder target) async {
-    await tester.ensureVisible(target);
-    await tester.pumpAndSettle();
+    await waitFor(target);
+    // Native IME insets arrive asynchronously, sometimes after pumpAndSettle.
+    // Re-scroll until the target can really receive a tap; never ignore misses.
+    for (var attempt = 0; attempt < 30; attempt++) {
+      await tester.ensureVisible(target);
+      await tester.pump(const Duration(milliseconds: 100));
+      if (target.hitTestable().evaluate().isNotEmpty) break;
+    }
+    expect(target.hitTestable(), findsOneWidget);
     await tester.tap(target);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> dismissKeyboard() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+    await tester.pump(const Duration(milliseconds: 700));
     await tester.pumpAndSettle();
   }
 
   await copy('中文正文 😀\n第二行');
   await tap(find.byTooltip('粘贴正文'));
   expect(app.blocks.first.text, '中文正文 😀\n第二行');
+  // The real Android IME covers the bottom navigation until dismissed.
+  await dismissKeyboard();
   await tap(find.text('设置').last);
   await copy('TEST-SN-001');
   await tap(find.byTooltip('粘贴设备 SN'));
   await copy('TEST-SID-001');
   await tap(find.byTooltip('粘贴设备 SID'));
+  final pastedSettings = tester
+      .widgetList<TextField>(find.byType(TextField))
+      .map((field) => field.controller!.text)
+      .toList();
+  expect(pastedSettings, containsAll(['TEST-SN-001', 'TEST-SID-001']));
   // Settings live below the keyboard and scroll viewport on a real phone.
-  FocusManager.instance.primaryFocus?.unfocus();
-  await tester.pumpAndSettle();
+  await dismissKeyboard();
   await tap(find.text('保存设置'));
   expect(store.settings.device.sn, 'TEST-SN-001');
   expect(store.settings.device.sid, 'TEST-SID-001');
@@ -48,6 +80,7 @@ Future<void> exerciseClipboard(
     of: find.byType(AlertDialog),
     matching: find.byType(TextField),
   );
+  await waitFor(jsonField);
   expect(
     tester.widget<TextField>(jsonField).controller!.text,
     contains('JSON-SN-1'),
