@@ -7,6 +7,16 @@ Android 与 Windows 的纯打印客户端，使用 **Flutter + Material Design 3
 - Windows：侧边导航、编辑 / 纸面预览双栏，支持窄窗口。
 - 两端独立运行，无需 Node.js、电脑服务或 FFmpeg。
 
+## 界面预览
+
+Windows：
+
+![Windows Material Design 3 编辑界面](docs/design/windows.png)
+
+Android：
+
+![Android Material Design 3 编辑界面](docs/design/android.png)
+
 ## 功能
 
 - 普通文字、自动识别 Markdown、表格、清单、代码与引用。

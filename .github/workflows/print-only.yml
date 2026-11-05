@@ -28,10 +28,14 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build apk --release --split-per-abi
+      - name: Record Android build source
+        run: printf '%s\n' "$GITHUB_SHA" > build/app/outputs/flutter-apk/COMMIT.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: xiaopiao-android-preview
-          path: build/app/outputs/flutter-apk/*.apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/flutter-apk/COMMIT.txt
           if-no-files-found: error
   windows:
     runs-on: windows-latest
@@ -53,6 +57,7 @@ jobs:
           Start-Sleep -Seconds 5
           if ($process.HasExited) { throw "Native app exited during startup: $($process.ExitCode)" }
           Stop-Process -Id $process.Id
+          $env:GITHUB_SHA | Set-Content -LiteralPath 'build/windows/x64/runner/Release/COMMIT.txt' -Encoding ascii
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: xiaopiao-windows-x64-preview
