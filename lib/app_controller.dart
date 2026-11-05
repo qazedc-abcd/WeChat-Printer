@@ -141,6 +141,20 @@ class AppController extends ChangeNotifier {
     final imported = list
         .map((item) => ReceiptBlock.fromJson(Map<String, dynamic>.from(item)))
         .toList();
+    for (final block in imported) {
+      final image = block.imageBytes;
+      if (image == null) continue;
+      if (image.length < 24 ||
+          image.length > imageByteLimit ||
+          !listEquals(image.sublist(0, 8), [137, 80, 78, 71, 13, 10, 26, 10])) {
+        throw const FormatException('文档内图片格式不正确，请从原图重新导入');
+      }
+      final header = ByteData.sublistView(image);
+      if (header.getUint32(16) != processedImageSize ||
+          header.getUint32(20) != processedImageSize) {
+        throw const FormatException('文档内图片不是已处理的方形图片，请从原图重新导入');
+      }
+    }
     blocks = imported.isEmpty ? [ReceiptBlock(kind: BlockKind.text)] : imported;
     changed();
   }
@@ -256,7 +270,13 @@ class AppController extends ChangeNotifier {
         PrintRecord(
           at: DateTime.now(),
           status: outcome.status,
-          summary: summary,
+          summary: snapshot
+              .map((b) => b.kind == BlockKind.image ? '[图片]' : b.text)
+              .join(' ')
+              .runes
+              .take(60)
+              .map(String.fromCharCode)
+              .join(),
           nodes: prepared.length,
           message: outcome.message,
         ),

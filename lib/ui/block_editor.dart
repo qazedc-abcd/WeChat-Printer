@@ -294,6 +294,11 @@ class _BlockEditorState extends State<BlockEditor> {
                   fontFamily: block.kind == BlockKind.markdown
                       ? 'Consolas'
                       : null,
+                  fontFamilyFallback: const [
+                    'Microsoft YaHei',
+                    'Noto Sans CJK SC',
+                    'sans-serif',
+                  ],
                 ),
               ),
             if (block.kind == BlockKind.text &&

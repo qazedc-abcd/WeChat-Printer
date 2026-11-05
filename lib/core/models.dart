@@ -256,7 +256,9 @@ class AppSettings {
     ai: AiSettings.fromJson(
       Map<String, dynamic>.from(value['ai'] as Map? ?? {}),
     ),
-    theme: '${value['theme'] ?? 'system'}',
+    theme: ['system', 'light', 'dark'].contains(value['theme'])
+        ? value['theme']
+        : 'system',
   );
 }
 

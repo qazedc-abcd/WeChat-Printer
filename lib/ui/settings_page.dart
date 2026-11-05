@@ -326,6 +326,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 '图片先在本机处理成方形白底黑白图，再上传为公开直链。',
                 [
                   DropdownButtonFormField<String>(
+                    key: ValueKey('host-$provider'),
                     initialValue: provider,
                     decoration: const InputDecoration(labelText: '图床服务'),
                     items: const [
@@ -484,6 +485,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 '手机与桌面使用一致的 Material Design 3。',
                 [
                   DropdownButtonFormField<String>(
+                    key: ValueKey('theme-$theme'),
                     initialValue: theme,
                     decoration: const InputDecoration(labelText: '颜色模式'),
                     items: const [

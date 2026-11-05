@@ -148,8 +148,9 @@ class _PrinterHomeState extends State<PrinterHome> {
   }
 
   Future<void> importFile(XFile file) async {
-    if (await file.length() > 2 * 1024 * 1024) {
-      throw const FormatException('文档请控制在 2 MiB 以内');
+    final jsonDocument = file.name.toLowerCase().endsWith('.json');
+    if (await file.length() > (jsonDocument ? 10 : 2) * 1024 * 1024) {
+      throw FormatException('文档请控制在 ${jsonDocument ? 10 : 2} MiB 以内');
     }
     final source = await file.readAsString();
     if (file.name.toLowerCase().endsWith('.json')) {
@@ -769,7 +770,7 @@ class _PrinterHomeState extends State<PrinterHome> {
                       ),
                     ),
                   ),
-                  if (compact) ...[
+                  if (compact || MediaQuery.sizeOf(context).width < 1038) ...[
                     OutlinedButton(onPressed: preview, child: const Text('预览')),
                     const SizedBox(width: 10),
                   ],

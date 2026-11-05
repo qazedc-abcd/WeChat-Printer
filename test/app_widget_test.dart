@@ -122,6 +122,19 @@ void main() {
         ..addFont(Future.value(ByteData.sublistView(font.readAsBytesSync())));
       await tester.runAsync(loader.load);
     }
+    final materialLoader = FontLoader('MaterialIcons')
+      ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+    await tester.runAsync(materialLoader.load);
+    final consoleFont = File(
+      '${Platform.environment['SystemRoot'] ?? 'C:/Windows'}/Fonts/consola.ttf',
+    );
+    if (consoleFont.existsSync()) {
+      final consoleLoader = FontLoader('Consolas')
+        ..addFont(
+          Future.value(ByteData.sublistView(consoleFont.readAsBytesSync())),
+        );
+      await tester.runAsync(consoleLoader.load);
+    }
     final output = Directory('test/visual-output')..createSync(recursive: true);
     final key = GlobalKey();
     for (final entry in {
