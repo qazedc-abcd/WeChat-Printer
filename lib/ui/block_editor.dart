@@ -6,6 +6,7 @@ import '../app_controller.dart';
 import '../core/models.dart';
 import '../core/receipt_compiler.dart';
 import 'image_dialog.dart';
+import 'paste_text_field.dart';
 
 class BlockEditor extends StatefulWidget {
   const BlockEditor({
@@ -269,8 +270,9 @@ class _BlockEditorState extends State<BlockEditor> {
               BlockKind.markdown,
               BlockKind.qr,
             ].contains(block.kind))
-              TextField(
+              PasteTextField(
                 controller: text,
+                pasteTooltip: block.kind == BlockKind.qr ? '粘贴二维码内容' : '粘贴正文',
                 minLines: block.kind == BlockKind.qr ? 2 : 4,
                 maxLines: 18,
                 onChanged: changed,
@@ -439,8 +441,9 @@ class _BlockEditorState extends State<BlockEditor> {
                   ],
                 )
               else
-                TextField(
+                PasteTextField(
                   controller: text,
+                  pasteTooltip: '粘贴图片直链',
                   onChanged: changed,
                   keyboardType: TextInputType.url,
                   decoration: const InputDecoration(

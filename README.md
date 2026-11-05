@@ -7,9 +7,11 @@ Android 与 Windows 的纯打印客户端，使用 **Flutter + Material Design 3
 - Windows：侧边导航、编辑 / 纸面预览双栏，支持窄窗口。
 - 两端独立运行，无需 Node.js、电脑服务或 FFmpeg。
 
-**[下载 Android / Windows 预览版](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/print-only-v0.1.0)** · [保留 QQ 接入的 main 版本](https://github.com/qazedc-abcd/WeChat-Printer/tree/main)
+**[下载 Android / Windows 预览版](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/print-only-v0.1.1)** · [保留 QQ 接入的 main 版本](https://github.com/qazedc-abcd/WeChat-Printer/tree/main)
 
-Android 通常选择 arm64-v8a APK；Windows 完整解压 ZIP 后运行 xiaopiao.exe。Android 预览版使用开发测试签名，正式发布需配置持久签名。
+Android 通常选择 arm64-v8a APK；Windows 完整解压 ZIP 后运行 xiaopiao.exe。从 0.1.1 起发布的 Android 预览版使用固定签名。0.1.0 使用临时签名，升级到 0.1.1 需要先导出草稿、保留原设备与图床配置，再卸载旧版安装；卸载会清除本机数据。后续保持同一签名的版本可覆盖更新。
+
+0.1.1 修复 Android 粘贴：正文、SN、SID、图床等输入框右侧均有粘贴按钮，长按菜单保留粘贴并关闭放大镜；Windows 支持 Ctrl+V。“粘贴 JSON”直接读取剪贴板，检查内容后点击“导入”，对话框也支持重新粘贴。设置项的粘贴按钮替换整项，正文、长按菜单和快捷键按光标或选区插入。只在点击粘贴时读取剪贴板。
 
 ## 界面预览
 
@@ -72,9 +74,11 @@ flutter build apk --release --split-per-abi
 flutter build windows --release
 ```
 
-CI 工作流为 `.github/workflows/print-only.yml`，产出 Android APK 和 Windows x64 Release 文件。Android 当前为开发测试签名预览版；正式发布需配置自己的持久签名。Windows 包需要完整解压后运行 `xiaopiao.exe`。
+CI 工作流为 `.github/workflows/print-only.yml`，产出 Android APK 和 Windows x64 Release 文件，并在 Android API 35 模拟器上验证真实系统剪贴板到正文、SN、SID、JSON 导入的完整链路。Windows 包需要完整解压后运行 `xiaopiao.exe`。
 
-全部网络测试使用模拟接口，不会触发实物打印或向真实图床 / AI 发送测试内容。原生设备上的最终效果需要使用自己的参数确认。
+发布签名通过仓库 Actions Secrets `PRINT_ONLY_PREVIEW_KEYSTORE`（JKS 的 Base64）与 `PRINT_ONLY_PREVIEW_PASSWORD` 恢复；别名为 `printonly-preview`。本机构建如需同一签名，设置 `PRINT_ONLY_KEYSTORE_PATH`、`PRINT_ONLY_KEYSTORE_PASSWORD`；没有设置时使用本机 debug 签名，其 APK 不保证能覆盖官方预览版。签名文件、密码及真实设备配置不进入源码或发布包。
+
+全部网络测试使用模拟接口，不会触发实物打印或向真实图床 / AI 发送测试内容。模拟器测试不能代替所有手机厂商系统的验证，实物出纸效果需要使用自己的参数确认。
 
 生成离屏设计预览（Windows 安装字体环境）：
 

@@ -30,11 +30,24 @@ android {
         versionName = flutter.versionName
     }
 
+    val previewKeyPath = System.getenv("PRINT_ONLY_KEYSTORE_PATH")
+    if (!previewKeyPath.isNullOrBlank()) {
+        val password = System.getenv("PRINT_ONLY_KEYSTORE_PASSWORD")
+        require(!password.isNullOrBlank()) { "Configured preview signing key requires its password" }
+        signingConfigs.create("persistentPreview") {
+            storeFile = file(previewKeyPath)
+            storePassword = password
+            keyAlias = "printonly-preview"
+            keyPassword = password
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Published previews share a persistent key; local builds can use debug.
+            signingConfig = signingConfigs.getByName(
+                if (previewKeyPath.isNullOrBlank()) "debug" else "persistentPreview"
+            )
         }
     }
 }

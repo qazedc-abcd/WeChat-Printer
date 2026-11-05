@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'app_controller.dart';
 import 'ui/home.dart';
 import 'ui/theme.dart';
@@ -31,6 +32,8 @@ class _PrinterAppState extends State<PrinterApp> {
     builder: (_, _) => MaterialApp(
       title: '小票台',
       debugShowCheckedModeBanner: false,
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
       theme: printerTheme(Brightness.light),
       darkTheme: printerTheme(Brightness.dark),
       themeMode: app.settings.theme == 'light'

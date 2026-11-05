@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import '../app_controller.dart';
 import '../core/models.dart';
 import 'theme.dart';
+import 'paste_text_field.dart';
+import 'device_json_dialog.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.controller});
@@ -161,7 +163,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> importJson(String source) async {
-    final decoded = jsonDecode(source);
+    final cleaned = source
+        .trim()
+        .replaceFirst(RegExp(r'^```(?:json)?\s*'), '')
+        .replaceFirst(RegExp(r'\s*```$'), '')
+        .replaceFirst('\uFEFF', '');
+    final decoded = jsonDecode(cleaned);
     if (decoded is! Map) throw const FormatException('配置需要是 JSON 对象');
     final device = DeviceSettings.fromJson(
       Map<String, dynamic>.from(decoded['device'] as Map? ?? decoded),
@@ -175,38 +182,17 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> pasteJson() async {
-    final editor = TextEditingController();
+    String? clipboard;
+    try {
+      clipboard = await readClipboardText();
+    } catch (_) {
+      /* Keep manual entry available. */
+    }
+    if (!mounted) return;
     final text = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('粘贴设备 JSON'),
-        content: SizedBox(
-          width: 460,
-          child: TextField(
-            controller: editor,
-            minLines: 6,
-            maxLines: 12,
-            decoration: const InputDecoration(
-              hintText: '可粘贴 SID 助手导出的设备 JSON，或旧版 config.json',
-              alignLabelWithHint: true,
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, editor.text),
-            child: const Text('导入'),
-          ),
-        ],
-      ),
+      builder: (context) => DeviceJsonDialog(initialText: clipboard ?? ''),
     );
-    // Wait until the route has released the editor before disposing its controller.
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    editor.dispose();
     if (text == null || text.trim().isEmpty) return;
     try {
       await importJson(text);
@@ -509,7 +495,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 24),
               Text(
-                '小票台 · Print Only 0.1.0\n本地草稿和记录可随时导出或清除。图片公开访问与设备出纸需要分别确认。',
+                '小票台 · Print Only 0.1.1\n本地草稿和记录可随时导出或清除。图片公开访问与设备出纸需要分别确认。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,
@@ -534,8 +520,10 @@ class _SettingsPageState extends State<SettingsPage> {
     TextInputType? keyboard,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 16),
-    child: TextField(
-      controller: fields[key],
+    child: PasteTextField(
+      controller: fields[key]!,
+      pasteReplacesAll: true,
+      pasteTooltip: '粘贴$label',
       obscureText: secret && !revealed.contains(key),
       keyboardType: keyboard,
       autocorrect: !secret,

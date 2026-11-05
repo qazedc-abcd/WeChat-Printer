@@ -2,6 +2,7 @@ package xyz.wechatprinter.wechat_printer_print_only
 
 import android.app.Activity
 import android.content.Intent
+import android.content.ClipboardManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -14,7 +15,18 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "xyz.wechatprinter.files")
             .setMethodCallHandler { call, result ->
-                if (call.method != "saveDocument") {
+                if (call.method == "readClipboardText") {
+                    try {
+                        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = clipboard.primaryClip
+                        val text = if (clip != null && clip.itemCount > 0) {
+                            clip.getItemAt(0).coerceToText(this)?.toString()
+                        } else null
+                        result.success(text)
+                    } catch (_: Exception) {
+                        result.error("clipboard", "无法读取系统剪贴板", null)
+                    }
+                } else if (call.method != "saveDocument") {
                     result.notImplemented()
                 } else if (saveResult != null) {
                     result.error("busy", "已有文件保存操作", null)
