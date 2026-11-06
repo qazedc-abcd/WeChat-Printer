@@ -2,8 +2,6 @@ import 'dart:convert';
 import 'models.dart';
 import 'network.dart';
 
-const receiptAiModel = 'deepseek-v4.1-flash';
-
 class AiSuggestion {
   const AiSuggestion(this.summary, this.issues, this.revised);
   final String summary, revised;
@@ -17,6 +15,8 @@ class AiChecker {
     if (!settings.enabled) {
       throw const FormatException('请先在设置中启用 AI 排版');
     }
+    final model = settings.model.trim();
+    if (model.isEmpty) throw const FormatException('请先在设置中填写模型名称');
     if (text.trim().isEmpty) throw const FormatException('请先输入需要检查的正文');
     if (text.runes.length > 60000) {
       throw const FormatException('AI 单次最多检查 60000 字符，请分段处理');
@@ -44,7 +44,7 @@ class AiChecker {
       },
       body: utf8.encode(
         jsonEncode({
-          'model': receiptAiModel,
+          'model': model,
           'stream': false,
           'messages': [
             {

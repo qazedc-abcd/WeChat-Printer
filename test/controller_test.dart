@@ -108,7 +108,7 @@ void main() {
             );
             final body = jsonDecode(request.body);
             expect(body['messages'][1]['content'], source);
-            expect(body['model'], 'deepseek-v4.1-flash');
+            expect(body['model'], 'mock-model');
             expect(request.headers['authorization'], 'Bearer MOCK_AI_KEY');
             expect(request.body, isNot(contains('DUMMY_SID')));
             return http.Response(

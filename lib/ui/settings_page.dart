@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../app_controller.dart';
 import '../core/models.dart';
-import '../core/ai_checker.dart';
 import 'theme.dart';
 import 'paste_text_field.dart';
 import 'device_json_dialog.dart';
@@ -36,6 +35,7 @@ class _SettingsPageState extends State<SettingsPage> {
       'sid': settings.device.sid,
       'accountType': settings.device.accountType.toString(),
       'aiBaseUrl': settings.ai.baseUrl,
+      'aiModel': settings.ai.model,
       'aiApiKey': settings.ai.apiKey,
     };
     for (final entry in values.entries.where(
@@ -87,7 +87,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ai: AiSettings(
       enabled: aiEnabled,
       baseUrl: value('aiBaseUrl'),
-      model: receiptAiModel,
+      model: value('aiModel'),
       apiKey: value('aiApiKey'),
     ),
     theme: theme,
@@ -118,6 +118,10 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
     if (aiEnabled) {
+      if (settings.ai.model.isEmpty) {
+        message('请填写服务端提供的模型名称');
+        return;
+      }
       final url = Uri.tryParse(settings.ai.baseUrl);
       if (url == null ||
           !['https', 'http'].contains(url.scheme) ||
@@ -458,7 +462,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       hint: 'https://api.example.com/v1',
                       keyboard: TextInputType.url,
                     ),
-                    const Text('模型 · $receiptAiModel'),
+                    field('aiModel', '模型名称'),
                     field('aiApiKey', 'API Key（本地无鉴权时可留空）', secret: true),
                   ],
                 ],
@@ -494,7 +498,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 24),
               Text(
-                '小票台 · Print Only 0.2.0\n本地草稿和记录可随时导出或清除。图片公开访问与设备出纸需要分别确认。',
+                '小票台 · Print Only 0.2.1\n本地草稿和记录可随时导出或清除。图片公开访问与设备出纸需要分别确认。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,
