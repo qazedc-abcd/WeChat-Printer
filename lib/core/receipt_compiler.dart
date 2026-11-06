@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:markdown/markdown.dart' as md;
 import 'models.dart';
 
@@ -28,18 +29,42 @@ class MarkdownIssue {
   final bool error;
 }
 
+class _CenterLineSyntax extends md.BlockSyntax {
+  const _CenterLineSyntax();
+
+  @override
+  RegExp get pattern => _marker;
+  static final _marker = RegExp(
+    r'^ {0,3}<center>(.+)</center>[ \t]*$',
+    caseSensitive: false,
+  );
+
+  @override
+  md.Node parse(md.BlockParser parser) {
+    final text = _marker.firstMatch(parser.current.content)![1]!;
+    parser.advance();
+    return md.Element('center', [md.UnparsedContent(text)]);
+  }
+}
+
 class ReceiptCompiler {
-  final md.Document parser = md.Document(
+  md.Document get parser => md.Document(
+    blockSyntaxes: const [_CenterLineSyntax()],
     extensionSet: md.ExtensionSet.gitHubFlavored,
     encodeHtml: false,
   );
-  PrinterNode content(List<String> columns, {List<int>? align}) => {
+  PrinterNode content(
+    List<String> columns, {
+    List<int>? align,
+    List<int>? weights,
+    int height = 0,
+  }) => {
     'content': {
       'maxcolumn': columns.length,
       'column_align': List.generate(
         columns.length,
         (i) => {
-          'column_width': 1,
+          'column_width': weights?[i] ?? 1,
           'style': {'justification': align?[i] ?? 0},
         },
       ),
@@ -48,7 +73,7 @@ class ReceiptCompiler {
           {'column': columns.map(printableText).toList()},
         ],
       },
-      'style': {'height': 0, 'width': 0},
+      'style': {'height': height, 'width': 0},
     },
   };
   PrinterNode get spacer => {
@@ -116,8 +141,10 @@ class ReceiptCompiler {
 
   List<PrinterNode> markdown(String source) {
     final output = <PrinterNode>[];
-    void line(String text, {int align = 0}) {
-      if (text.isNotEmpty) output.add(content([text], align: [align]));
+    void line(String text, {int align = 0, int height = 0}) {
+      if (text.isNotEmpty) {
+        output.add(content([text], align: [align], height: height));
+      }
     }
 
     String flat(md.Node node) => node is md.Text
@@ -125,16 +152,21 @@ class ReceiptCompiler {
         : (node as md.Element).tag == 'img'
         ? (node.attributes['alt'] ?? '[图片]')
         : (node.children ?? []).map(flat).join();
-    void inline(List<md.Node> nodes, {String prefix = '', int align = 0}) {
+    void inline(
+      List<md.Node> nodes, {
+      String prefix = '',
+      int align = 0,
+      int height = 0,
+    }) {
       var buffer = prefix;
       void flush() {
-        line(buffer, align: align);
+        line(buffer, align: align, height: height);
         buffer = '';
       }
 
       void visit(md.Node node) {
         if (node is md.Text) {
-          buffer += node.text;
+          buffer += node.text.replaceAll('\n', ' ');
           return;
         }
         final el = node as md.Element;
@@ -148,7 +180,7 @@ class ReceiptCompiler {
             },
           });
         } else if (el.tag == 'br') {
-          buffer += '\n';
+          flush();
         } else if (el.tag == 'a') {
           final text = el.textContent, href = el.attributes['href'] ?? '';
           buffer += text;
@@ -166,30 +198,41 @@ class ReceiptCompiler {
       flush();
     }
 
-    void tableRows(md.Node node) {
-      if (node is! md.Element) return;
-      if (node.tag == 'tr') {
-        final cells = (node.children ?? []).whereType<md.Element>().toList();
-        if (cells.isNotEmpty) {
-          output.add(
-            content(
-              cells.map(flat).toList(),
-              align: cells.map((cell) {
-                final style =
-                    cell.attributes['style'] ?? cell.attributes['align'] ?? '';
-                return style.contains('right')
-                    ? 2
-                    : style.contains('center')
-                    ? 1
-                    : 0;
-              }).toList(),
-            ),
-          );
+    void tableRows(md.Element table) {
+      final rows = [
+        for (final section in table.children!.whereType<md.Element>())
+          for (final row in section.children!.whereType<md.Element>())
+            row.children!.whereType<md.Element>().toList(),
+      ];
+      if (rows.isEmpty) return;
+      final values = rows.map((row) => row.map(flat).toList()).toList();
+      final weights = <int>[], alignments = <int>[];
+      final numeric = RegExp(
+        r'^[¥￥$€£]?[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$',
+      );
+      for (final (index, header) in rows.first.indexed) {
+        var width = 2;
+        for (final row in values) {
+          // The printer wraps long cells. Limit their influence on other columns.
+          final cells = printableText(
+            row[index],
+          ).runes.fold<int>(0, (sum, rune) => sum + (rune >= 0x2e80 ? 2 : 1));
+          width = math.max(width, cells.clamp(2, 18));
         }
-      } else {
-        for (final child in node.children ?? <md.Node>[]) {
-          tableRows(child);
-        }
+        weights.add(width);
+        final data = values
+            .skip(1)
+            .map((row) => row[index].trim())
+            .where((v) => v.isNotEmpty);
+        alignments.add(switch (header.attributes['align']) {
+          'center' => 1,
+          'right' => 2,
+          'left' => 0,
+          _ => data.isNotEmpty && data.every(numeric.hasMatch) ? 2 : 0,
+        });
+      }
+      for (final row in values) {
+        output.add(content(row, align: alignments, weights: weights));
       }
     }
 
@@ -232,7 +275,8 @@ class ReceiptCompiler {
         inline(
           children,
           prefix: prefix,
-          align: RegExp(r'^h[1-6]$').hasMatch(el.tag) ? 1 : 0,
+          align: el.tag == 'h1' || el.tag == 'center' ? 1 : 0,
+          height: el.tag == 'h1' ? 1 : 0,
         );
       }
     }

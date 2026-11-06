@@ -7,7 +7,7 @@ Android 与 Windows 的纯打印客户端，使用 **Flutter + Material Design 3
 - Windows：侧边导航、编辑 / 纸面预览双栏，支持窄窗口。
 - 两端独立运行，无需 Node.js、电脑服务或 FFmpeg。
 
-**[下载 Android / Windows 预览版](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/print-only-v0.1.1)** · [保留 QQ 接入的 main 版本](https://github.com/qazedc-abcd/WeChat-Printer/tree/main)
+**[下载 Android / Windows 预览版](https://github.com/qazedc-abcd/WeChat-Printer/releases/tag/print-only-v0.2.0)** · [保留 QQ 接入的 main 版本](https://github.com/qazedc-abcd/WeChat-Printer/tree/main)
 
 Android 通常选择 arm64-v8a APK；Windows 完整解压 ZIP 后运行 xiaopiao.exe。从 0.1.1 起发布的 Android 预览版使用固定签名。0.1.0 使用临时签名，升级到 0.1.1 需要先导出草稿、保留原设备与图床配置，再卸载旧版安装；卸载会清除本机数据。后续保持同一签名的版本可覆盖更新。
 
@@ -43,6 +43,14 @@ Android：
 [协议与图片实测说明](docs/PRINTAD-PROTOCOL.md) · [两端设计与实现](docs/PRINT-ONLY-DESIGN.md)
 
 设备 SID 有有效期，失效后需要重新获取。接口返回成功只代表请求受理，出纸与完整性以实物为准。
+
+## Markdown 小票排版
+
+一级标题居中并加高，分节标题和正文靠左。需要单独居中的一行可以写成 `<center>谢谢惠顾</center>`。表格沿用 Markdown 分隔行的对齐设置，纯数值列默认靠右。同一张表的各行共用列宽，长内容由打印机在列内换行。预览使用发送给打印机的列宽权重和对齐方式。
+
+本地规则在编辑时生效。需要 AI 建议时，在设置中启用 AI、填写兼容 OpenAI 的基础地址和密钥，然后在内容块中请求排版。模型固定为 `deepseek-v4.1-flash`。核对建议后可以手动应用。
+
+如果服务运行在 Windows 本机的 8788 端口，Windows 客户端可填写 `http://127.0.0.1:8788/v1`。Android 真机的回环地址指向手机自身。使用 USB 调试连接电脑时，可以先执行 `adb reverse tcp:8788 tcp:8788`，再在手机中填写同一地址。
 
 ## 图片与二维码
 

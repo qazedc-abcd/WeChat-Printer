@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../app_controller.dart';
 import '../core/models.dart';
+import '../core/ai_checker.dart';
 import 'theme.dart';
 import 'paste_text_field.dart';
 import 'device_json_dialog.dart';
@@ -35,7 +36,6 @@ class _SettingsPageState extends State<SettingsPage> {
       'sid': settings.device.sid,
       'accountType': settings.device.accountType.toString(),
       'aiBaseUrl': settings.ai.baseUrl,
-      'aiModel': settings.ai.model,
       'aiApiKey': settings.ai.apiKey,
     };
     for (final entry in values.entries.where(
@@ -87,7 +87,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ai: AiSettings(
       enabled: aiEnabled,
       baseUrl: value('aiBaseUrl'),
-      model: value('aiModel'),
+      model: receiptAiModel,
       apiKey: value('aiApiKey'),
     ),
     theme: theme,
@@ -119,14 +119,13 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     if (aiEnabled) {
       final url = Uri.tryParse(settings.ai.baseUrl);
-      if (settings.ai.model.isEmpty ||
-          url == null ||
+      if (url == null ||
           !['https', 'http'].contains(url.scheme) ||
           url.host.isEmpty ||
           url.userInfo.isNotEmpty ||
           url.hasQuery ||
           url.hasFragment) {
-        message('请填写有效的 AI 基础地址和模型名称');
+        message('请填写有效的 AI 基础地址');
         return;
       }
     }
@@ -443,12 +442,12 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 20),
               _section(
                 Icons.auto_awesome_outlined,
-                '可选 AI 检查',
-                'Markdown 基础检查在本机完成。只有手动点击 AI 检查，才发送当前正文。',
+                '可选 AI 排版',
+                'Markdown 基础检查在本机完成。只有手动点击 AI 排版，才发送当前正文。',
                 [
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('启用 AI 检查'),
+                    title: const Text('启用 AI 排版'),
                     value: aiEnabled,
                     onChanged: (value) => setState(() => aiEnabled = value),
                   ),
@@ -459,7 +458,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       hint: 'https://api.example.com/v1',
                       keyboard: TextInputType.url,
                     ),
-                    field('aiModel', '模型名称'),
+                    const Text('模型 · $receiptAiModel'),
                     field('aiApiKey', 'API Key（本地无鉴权时可留空）', secret: true),
                   ],
                 ],
@@ -495,7 +494,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 24),
               Text(
-                '小票台 · Print Only 0.1.1\n本地草稿和记录可随时导出或清除。图片公开访问与设备出纸需要分别确认。',
+                '小票台 · Print Only 0.2.0\n本地草稿和记录可随时导出或清除。图片公开访问与设备出纸需要分别确认。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,

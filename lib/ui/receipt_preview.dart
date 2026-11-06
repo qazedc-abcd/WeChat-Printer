@@ -176,16 +176,21 @@ class ReceiptPreview extends StatelessWidget {
                               children: List.generate(
                                 columns.length,
                                 (i) => Expanded(
-                                  child: Text(
-                                    columns[i],
+                                  flex: aligns[i]['column_width'] as int? ?? 1,
+                                  child: _PaperText(
+                                    text: columns[i],
+                                    height:
+                                        content['style']?['height'] as int? ??
+                                        0,
+                                    width:
+                                        content['style']?['width'] as int? ?? 0,
                                     textAlign:
-                                        aligns[i]['style']['justification'] == 1
-                                        ? TextAlign.center
-                                        : aligns[i]['style']['justification'] ==
-                                              2
-                                        ? TextAlign.right
-                                        : TextAlign.left,
-                                    softWrap: true,
+                                        switch (aligns[i]['style']?['justification'] ??
+                                        content['style']?['justification']) {
+                                          1 => TextAlign.center,
+                                          2 => TextAlign.right,
+                                          _ => TextAlign.left,
+                                        },
                                   ),
                                 ),
                               ),
@@ -197,6 +202,39 @@ class ReceiptPreview extends StatelessWidget {
             ),
             const _PaperEdge(bottom: true),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaperText extends StatelessWidget {
+  const _PaperText({
+    required this.text,
+    required this.height,
+    required this.width,
+    required this.textAlign,
+  });
+  final String text;
+  final int height, width;
+  final TextAlign textAlign;
+
+  @override
+  Widget build(BuildContext context) {
+    if (width == 0 && height == 0) return Text(text, textAlign: textAlign);
+    final fontSize = DefaultTextStyle.of(context).style.fontSize ?? 12;
+    final xScale = (1 + width) / (1 + height);
+    // Lay out with the printed glyph width before stretching its height.
+    return FractionallySizedBox(
+      widthFactor: 1 / xScale,
+      alignment: Alignment.topLeft,
+      child: Transform.scale(
+        alignment: Alignment.topLeft,
+        scaleX: xScale,
+        child: Text(
+          text,
+          textAlign: textAlign,
+          style: TextStyle(fontSize: fontSize * (1 + height)),
         ),
       ),
     );

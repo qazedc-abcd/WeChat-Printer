@@ -6,6 +6,7 @@ import '../app_controller.dart';
 import '../core/models.dart';
 import '../core/receipt_compiler.dart';
 import 'image_dialog.dart';
+import 'receipt_preview.dart';
 import 'paste_text_field.dart';
 
 class BlockEditor extends StatefulWidget {
@@ -92,8 +93,8 @@ class _BlockEditorState extends State<BlockEditor> {
   }
 
   Future<void> aiCheck() async {
-    if (!app.settings.ai.enabled || app.settings.ai.model.isEmpty) {
-      message('先在设置中启用 AI 检查并填写模型');
+    if (!app.settings.ai.enabled) {
+      message('先在设置中启用 AI 排版');
       widget.openSettings();
       return;
     }
@@ -105,7 +106,7 @@ class _BlockEditorState extends State<BlockEditor> {
       final apply = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('AI 检查建议'),
+          title: const Text('AI 排版预览'),
           content: SizedBox(
             width: 600,
             child: SingleChildScrollView(
@@ -123,6 +124,12 @@ class _BlockEditorState extends State<BlockEditor> {
                       child: Text(issue),
                     ),
                   const Divider(),
+                  Center(
+                    child: ReceiptPreview(
+                      nodes: app.compiler.markdown(result.revised),
+                      blocks: [block],
+                    ),
+                  ),
                   const Text(
                     '建议全文',
                     style: TextStyle(fontWeight: FontWeight.w600),
@@ -139,7 +146,7 @@ class _BlockEditorState extends State<BlockEditor> {
               child: const Text('保留原文'),
             ),
             FilledButton(
-              onPressed: block.text == source
+              onPressed: block.text == source && result.revised != source
                   ? () => Navigator.pop(context, true)
                   : null,
               child: const Text('应用建议'),
@@ -148,6 +155,7 @@ class _BlockEditorState extends State<BlockEditor> {
         ),
       );
       if (apply == true && mounted && block.text == source) {
+        block.autoMarkdown = true;
         block.text = result.revised;
         text.text = block.text;
         app.changed();
@@ -333,7 +341,8 @@ class _BlockEditorState extends State<BlockEditor> {
                   ],
                 ),
               ),
-            if (markdown) ...[
+            if (block.kind == BlockKind.markdown ||
+                block.kind == BlockKind.text) ...[
               const SizedBox(height: 10),
               Wrap(
                 spacing: 8,
@@ -349,7 +358,9 @@ class _BlockEditorState extends State<BlockEditor> {
                         : scheme.primary,
                   ),
                   Text(
-                    issues.isEmpty ? '本地检查未发现排版问题' : '${issues.length} 条排版提示',
+                    issues.isEmpty
+                        ? (markdown ? '本地检查未发现排版问题' : '普通文本')
+                        : '${issues.length} 条排版提示',
                     style: TextStyle(
                       fontSize: 12,
                       color: scheme.onSurfaceVariant,
@@ -358,7 +369,7 @@ class _BlockEditorState extends State<BlockEditor> {
                   TextButton.icon(
                     onPressed: aiBusy ? null : aiCheck,
                     icon: const Icon(Icons.auto_awesome_outlined, size: 16),
-                    label: Text(aiBusy ? '检查中…' : 'AI 检查'),
+                    label: Text(aiBusy ? '排版中…' : 'AI 排版'),
                   ),
                 ],
               ),

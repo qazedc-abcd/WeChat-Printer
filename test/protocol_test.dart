@@ -71,6 +71,38 @@ void main() {
     );
   });
 
+  test('headings, centered lines, breaks and table column weights', () {
+    final compiler = ReceiptCompiler();
+    final nodes = compiler.markdown(
+      '# 店名\n## 商品\n<center>**欢迎**</center>\nsoft\nwrap  \nhard\n\n'
+      '| 商品 | 数量 | 编号 |\n| --- | --- | :--- |\n| 手冲咖啡超大杯 | 2 | 123 |',
+    );
+    List<dynamic> columns(int i) =>
+        nodes[i]['content']['lines']['linelist'][0]['column'];
+    List<dynamic> layout(int i) => nodes[i]['content']['column_align'];
+    expect(layout(0).single['style']['justification'], 1);
+    expect(nodes[0]['content']['style']['height'], 1);
+    expect(layout(1).single['style']['justification'], 0);
+    expect(columns(2), ['欢迎']);
+    expect(layout(2).single['style']['justification'], 1);
+    expect(columns(3), ['soft wrap']);
+    expect(columns(4), ['hard']);
+    expect(layout(5), layout(6));
+    expect(
+      layout(5)[0]['column_width'],
+      greaterThan(layout(5)[1]['column_width']),
+    );
+    expect(layout(5)[1]['style']['justification'], 2);
+    expect(layout(5)[2]['style']['justification'], 0);
+    expect(compiler.detectsMarkdown('<center>独立行</center>'), true);
+    final literal = compiler
+        .markdown('~~~txt\n<center>code</center>\n~~~')
+        .single;
+    expect(literal['content']['lines']['linelist'][0]['column'], [
+      '<center>code</center>',
+    ]);
+  });
+
   test(
     'long native QR blocked by UTF-8 bytes before HTTP; request payload retains credentials only for target',
     () async {

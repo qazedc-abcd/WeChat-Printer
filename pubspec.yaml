@@ -1,7 +1,7 @@
 name: wechat_printer_print_only
 description: "Material Design 3 receipt editor for Android and Windows, with direct printad and R2/S3 support."
 publish_to: 'none'
-version: 0.1.1+2
+version: 0.2.0+3
 
 environment:
   sdk: ^3.11.3

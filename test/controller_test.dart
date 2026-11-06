@@ -95,6 +95,7 @@ void main() {
   test(
     'AI is explicit, sends only current document and never applies automatically',
     () async {
+      const source = '#标题\r\n苹果 18.50 元\r\n~~~\r\n代码\r\n~~~';
       var calls = 0;
       final app = AppController(
         store: MemoryStore(),
@@ -106,8 +107,8 @@ void main() {
               'https://ai.example.com/v1/chat/completions',
             );
             final body = jsonDecode(request.body);
-            expect(body['messages'][1]['content'], '#标题');
-            expect(body['model'], 'mock-model');
+            expect(body['messages'][1]['content'], source);
+            expect(body['model'], 'deepseek-v4.1-flash');
             expect(request.headers['authorization'], 'Bearer MOCK_AI_KEY');
             expect(request.body, isNot(contains('DUMMY_SID')));
             return http.Response(
@@ -118,7 +119,12 @@ void main() {
                       'content': jsonEncode({
                         'summary': '添加空格',
                         'issues': [],
-                        'revisedMarkdown': '# 标题',
+                        'layout': [
+                          {'line': 1, 'style': 'fixHeading'},
+                          {'line': 2, 'style': 'center'},
+                          {'line': 4, 'style': 'title'},
+                        ],
+                        'revisedMarkdown': '正文篡改应被忽略',
                       }),
                     },
                   },
@@ -131,8 +137,8 @@ void main() {
         ),
       );
       await app.initialize();
-      app.blocks = [ReceiptBlock(kind: BlockKind.markdown, text: '#标题')];
-      await expectLater(app.checkAi('#标题'), throwsFormatException);
+      app.blocks = [ReceiptBlock(kind: BlockKind.markdown, text: source)];
+      await expectLater(app.checkAi(source), throwsFormatException);
       expect(calls, 0);
       await app.saveSettings(
         const AppSettings(
@@ -146,10 +152,13 @@ void main() {
         ),
       );
       expect(calls, 0);
-      final suggestion = await app.checkAi('#标题');
+      final suggestion = await app.checkAi(source);
       expect(calls, 1);
-      expect(suggestion.revised, '# 标题');
-      expect(app.blocks.single.text, '#标题');
+      expect(
+        suggestion.revised,
+        '# 标题\r\n<center>苹果 18.50 元</center>\r\n~~~\r\n代码\r\n~~~',
+      );
+      expect(app.blocks.single.text, source);
       app.dispose();
     },
   );
