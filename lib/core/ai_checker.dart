@@ -105,7 +105,9 @@ class AiChecker {
     String? fence;
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
-      final marker = RegExp(r'^ {0,3}(`{3,}|~{3,})(.*)$').firstMatch(line);
+      final marker = RegExp(
+        r'^ {0,3}(`{3,}|~{3,})(.*)$',
+      ).firstMatch(line.trimRight());
       if (marker != null) {
         final token = marker[1]!;
         if (fence == null) {
